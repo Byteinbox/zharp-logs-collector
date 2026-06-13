@@ -556,6 +556,70 @@ UNIT
     || warn "Check logs: journalctl -fu zharp-collector"
 fi
 
+# ── step 6 (macOS): launchd ───────────────────────────────────────────────────
+if [[ "$OS" == "darwin" ]]; then
+  PLIST_LABEL="io.zharp.collector"
+  PLIST_FILE="/Library/LaunchDaemons/${PLIST_LABEL}.plist"
+
+  # Unload existing service if present
+  launchctl list "$PLIST_LABEL" &>/dev/null && launchctl unload -w "$PLIST_FILE" 2>/dev/null || true
+
+  # Build EnvironmentVariables XML block from env file
+  ENV_XML=""
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    key="${line%%=*}"
+    val="${line#*=}"
+    # Escape XML special chars in value
+    val="${val//&/&amp;}"
+    val="${val//</&lt;}"
+    val="${val//>/&gt;}"
+    val="${val//\"/&quot;}"
+    ENV_XML+="        <key>${key}</key>
+        <string>${val}</string>
+"
+  done < "$ENV_FILE"
+
+  cat > "$PLIST_FILE" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${PLIST_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${INSTALL_DIR}/zharp-collector</string>
+        <string>--config</string>
+        <string>${CONFIG_FILE}</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+${ENV_XML}    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/zharp-collector.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/zharp-collector.log</string>
+</dict>
+</plist>
+PLIST
+
+  chmod 644 "$PLIST_FILE"
+  launchctl load -w "$PLIST_FILE"
+  sleep 2
+
+  if launchctl list | grep -q "$PLIST_LABEL"; then
+    ok "Service loaded (launchd)."
+  else
+    warn "Check logs: sudo tail -f /var/log/zharp-collector.log"
+    warn "Or: sudo launchctl list $PLIST_LABEL"
+  fi
+fi
+
 # ── done ──────────────────────────────────────────────────────────────────────
 echo
 echo -e "${BOLD}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -565,10 +629,17 @@ echo
 echo -e "  ${BOLD}Config:${NC}  $CONFIG_FILE"
 echo -e "  ${BOLD}Secrets:${NC} $ENV_FILE"
 echo
-dim "sudo systemctl status  zharp-collector"
-dim "sudo journalctl     -fu zharp-collector"
-dim "sudo nano $CONFIG_FILE"
-dim "sudo systemctl restart zharp-collector"
+if [[ "$OS" == "darwin" ]]; then
+  dim "sudo launchctl list io.zharp.collector"
+  dim "sudo launchctl unload /Library/LaunchDaemons/io.zharp.collector.plist && sudo launchctl load -w /Library/LaunchDaemons/io.zharp.collector.plist"
+  dim "sudo tail -f /var/log/zharp-collector.log"
+  dim "sudo nano $CONFIG_FILE"
+else
+  dim "sudo systemctl status  zharp-collector"
+  dim "sudo journalctl     -fu zharp-collector"
+  dim "sudo nano $CONFIG_FILE"
+  dim "sudo systemctl restart zharp-collector"
+fi
 echo
 echo -e "  Data will appear in your Zharp dashboard within a minute."
 echo
