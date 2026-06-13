@@ -1,10 +1,10 @@
 FROM golang:1.26-alpine AS builder
 WORKDIR /src
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build \
+RUN CGO_ENABLED=0 GOOS=linux go build -C ./dist \
     -ldflags="-s -w" \
     -o /zharp-collector \
-    ./dist/
+    .
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=builder /zharp-collector /zharp-collector
