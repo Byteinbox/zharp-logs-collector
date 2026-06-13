@@ -133,6 +133,7 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+          pattern: "{linux,darwin,windows}-{amd64,arm64}"
 
       - uses: softprops/action-gh-release@v2
         with:
