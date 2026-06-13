@@ -64,15 +64,12 @@ curl -Lo zharp-collector.tar.gz \
 
 tar -xzf zharp-collector.tar.gz
 sudo install -m 755 zharp-collector-linux-* /usr/local/bin/zharp-collector
-sudo mkdir -p /etc/zharp-collector
-sudo cp collector-config.yaml /etc/zharp-collector/config.yaml
 ```
 
-**Edit config**
+Then run the installer to generate your config and set up the systemd service:
 
 ```bash
-sudo nano /etc/zharp-collector/config.yaml
-# Set: api_key and endpoint under the zharp: exporter
+curl -sSL https://raw.githubusercontent.com/Byteinbox/zharp-logs-collector/main/install.sh | sudo bash
 ```
 
 **Run as systemd service**
@@ -164,11 +161,9 @@ sudo launchctl load /Library/LaunchDaemons/io.zharp.collector.plist
 
 ### Windows
 
-1. Download `zharp-collector-<version>-windows-amd64.zip` from the [releases page](https://github.com/Byteinbox/zharp-logs-collector/releases/latest).
-2. Extract the zip.
-3. Copy `zharp-collector.exe` to `C:\Program Files\zharp-collector\`
-4. Copy `collector-config.yaml` to `C:\ProgramData\zharp-collector\config.yaml`
-5. Edit the config with your API key.
+1. Download `zharp-collector-<version>-windows-amd64.exe` from the [releases page](https://github.com/Byteinbox/zharp-logs-collector/releases/latest).
+2. Copy it to `C:\Program Files\zharp-collector\zharp-collector.exe`
+3. Create `C:\ProgramData\zharp-collector\config.yaml` — see the [Configuration](#configuration) section below.
 
 **Install as a Windows Service (PowerShell, run as Administrator)**
 

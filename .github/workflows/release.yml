@@ -54,16 +54,17 @@ jobs:
             -o "../zharp-collector-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" \
             .
 
-      - name: Package (tar.gz for unix, zip for windows)
+      - name: Package (tar.gz for unix, raw exe for windows)
         run: |
           BINARY="zharp-collector-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
-          ARCHIVE_BASE="zharp-collector-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}"
           if [ "${{ matrix.goos }}" = "windows" ]; then
-            zip "${ARCHIVE_BASE}.zip" "${BINARY}" collector-config.yaml
-            echo "ASSET=${ARCHIVE_BASE}.zip" >> $GITHUB_ENV
+            VERSIONED="zharp-collector-${{ github.ref_name }}-windows-amd64.exe"
+            mv "${BINARY}" "${VERSIONED}"
+            echo "ASSET=${VERSIONED}" >> $GITHUB_ENV
           else
-            tar -czf "${ARCHIVE_BASE}.tar.gz" "${BINARY}" collector-config.yaml
-            echo "ASSET=${ARCHIVE_BASE}.tar.gz" >> $GITHUB_ENV
+            ARCHIVE="zharp-collector-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+            tar -czf "${ARCHIVE}" "${BINARY}"
+            echo "ASSET=${ARCHIVE}" >> $GITHUB_ENV
           fi
 
       - uses: actions/upload-artifact@v4
