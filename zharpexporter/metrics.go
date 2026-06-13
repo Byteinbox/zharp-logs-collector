@@ -36,6 +36,7 @@ type zharpMetricsExporter struct {
 	cfg      *Config
 	logger   *zap.Logger
 	hostname string
+	cancel   context.CancelFunc
 }
 
 func newMetricsExporter(cfg *Config, logger *zap.Logger) *zharpMetricsExporter {
@@ -49,10 +50,57 @@ func (e *zharpMetricsExporter) Capabilities() consumer.Capabilities {
 
 func (e *zharpMetricsExporter) Start(_ context.Context, _ component.Host) error {
 	e.logger.Info("Zharp metrics exporter started", zap.String("endpoint", defaultEndpoint))
+	ctx, cancel := context.WithCancel(context.Background())
+	e.cancel = cancel
+	go e.heartbeatLoop(ctx)
 	return nil
 }
 
-func (e *zharpMetricsExporter) Shutdown(_ context.Context) error { return nil }
+func (e *zharpMetricsExporter) Shutdown(_ context.Context) error {
+	if e.cancel != nil {
+		e.cancel()
+	}
+	return nil
+}
+
+func (e *zharpMetricsExporter) heartbeatLoop(ctx context.Context) {
+	e.sendHeartbeat(ctx)
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			e.sendHeartbeat(ctx)
+		}
+	}
+}
+
+func (e *zharpMetricsExporter) sendHeartbeat(ctx context.Context) {
+	payload := map[string]string{
+		"hostname": e.hostname,
+		"os":       runtime.GOOS,
+		"version":  agentVersion,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	url := fmt.Sprintf("%s/agent/heartbeat/%s", defaultEndpoint, e.cfg.APIKey)
+	req, err := newRequest(ctx, url, bytes.NewReader(body), e.cfg.APIKey)
+	if err != nil {
+		e.logger.Debug("heartbeat: create request failed", zap.Error(err))
+		return
+	}
+	resp, err := defaultHTTPClient(10 * time.Second).Do(req)
+	if err != nil {
+		e.logger.Debug("heartbeat: request failed", zap.Error(err))
+		return
+	}
+	resp.Body.Close()
+	e.logger.Debug("heartbeat sent", zap.String("hostname", e.hostname))
+}
 
 func (e *zharpMetricsExporter) ConsumeMetrics(ctx context.Context, md pmetric.Metrics) error {
 	points := convertMetrics(md)
