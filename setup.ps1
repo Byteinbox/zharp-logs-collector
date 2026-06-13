@@ -434,23 +434,32 @@ ok "Secrets -> $ENV_FILE"
 # ── step 6: windows service ──────────────────────────────────────────────────
 section "6 · Installing Windows service"
 
-# Remove existing service if present
+# Remove existing service if present and wait for Windows to release it
 $existing = Get-Service -Name $SVC_NAME -ErrorAction SilentlyContinue
 if ($existing) {
     Stop-Service -Name $SVC_NAME -Force -ErrorAction SilentlyContinue
     sc.exe delete $SVC_NAME | Out-Null
-    Start-Sleep -Seconds 2
+    # Wait until the registry key is gone (Windows marks it for deletion asynchronously)
+    $waited = 0
+    while ((Test-Path "HKLM:\SYSTEM\CurrentControlSet\Services\$SVC_NAME") -and $waited -lt 15) {
+        Start-Sleep -Seconds 1; $waited++
+    }
 }
 
 # Register the collector exe directly as a Windows service.
-# The binary already implements the Windows Service Control Manager protocol.
-$binPath = "`"$EXE_PATH`" --config `"$CONFIG_FILE`""
-sc.exe create $SVC_NAME binPath= $binPath start= auto DisplayName= "Zharp Collector" | Out-Null
-sc.exe description $SVC_NAME "Zharp OpenTelemetry Collector agent" | Out-Null
+# New-Service handles path quoting reliably and creates the registry key immediately.
+New-Service `
+    -Name $SVC_NAME `
+    -DisplayName "Zharp Collector" `
+    -Description "Zharp OpenTelemetry Collector agent" `
+    -BinaryPathName "`"$EXE_PATH`" --config `"$CONFIG_FILE`"" `
+    -StartupType Automatic | Out-Null
+
+# Set restart-on-failure behaviour (3 attempts, 5 s delay each)
 sc.exe failure $SVC_NAME reset= 86400 actions= restart/5000/restart/5000/restart/5000 | Out-Null
 
-# Store environment variables in the service's registry key so they are
-# available to the process when Windows starts it (no wrapper script needed).
+# Store API key and any DB passwords in the service's registry key so the
+# process reads them as normal env vars — no wrapper script needed.
 $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$SVC_NAME"
 Set-ItemProperty -Path $regPath -Name "Environment" -Value $envLines.ToArray() -Type MultiString
 
