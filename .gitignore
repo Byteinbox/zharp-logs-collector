@@ -1,0 +1,15 @@
+# Compiled binaries — built by CI/OCB, not committed
+dist/zharp-collector
+dist/zharp-collector.exe
+dist/zharp-collector-*
+
+# Go build cache
+*.test
+*.out
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

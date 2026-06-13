@@ -1,0 +1,90 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zharp-collector-config
+  namespace: zharp-system
+data:
+  config.yaml: |
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    receivers:
+      # Tail all container logs from this node
+      filelog:
+        include:
+          - /var/log/containers/*.log
+        include_file_path: true
+        include_file_name: false
+        operators:
+          # Parse the containerd CRI log format: timestamp stream flags message
+          - type: regex_parser
+            id: parse_cri
+            regex: '^(?P<time>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?) (?P<stream>stdout|stderr) [^ ]* (?P<message>.*)$'
+            timestamp:
+              parse_from: attributes.time
+              layout: '%Y-%m-%dT%H:%M:%SZ'
+            on_error: drop
+          - type: move
+            from: attributes.message
+            to: body
+          # Extract pod, namespace, container from the file path
+          # e.g. /var/log/containers/podname_namespace_containername-id.log
+          - type: regex_parser
+            id: parse_filename
+            parse_from: attributes["log.file.path"]
+            regex: '/var/log/containers/(?P<pod>[^_]+)_(?P<namespace>[^_]+)_(?P<container>[^-]+)-.*\.log'
+            on_error: drop
+
+      # Host-level metrics (CPU, memory, disk, network)
+      hostmetrics:
+        root_path: /hostfs
+        collection_interval: 30s
+        scrapers:
+          cpu:
+          memory:
+          disk:
+          network:
+          filesystem:
+          load:
+
+      # Accept OTLP from sidecar applications on this node
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch:
+        send_batch_size: 500
+        timeout: 5s
+
+      memory_limiter:
+        limit_mib: 256
+        spike_limit_mib: 64
+        check_interval: 5s
+
+      resourcedetection:
+        detectors: [system, env, k8snode]
+        timeout: 10s
+
+    exporters:
+      zharp:
+        endpoint: "${env:ZHARP_ENDPOINT}"
+        api_key: "${env:ZHARP_API_KEY}"
+        timeout: 10s
+        batch_size: 500
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        logs:
+          receivers: [filelog, otlp]
+          processors: [memory_limiter, resourcedetection, batch]
+          exporters: [zharp]
+        metrics:
+          receivers: [hostmetrics, otlp]
+          processors: [memory_limiter, resourcedetection, batch]
+          exporters: [zharp]

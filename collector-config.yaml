@@ -1,0 +1,65 @@
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  # Tail log files on this host
+  filelog:
+    include:
+      - /var/log/nginx/access.log
+      - /var/log/nginx/error.log
+      # - /var/log/myapp/*.log
+    operators:
+      - type: regex_parser
+        regex: '^(?P<time>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?) (?P<level>\w+) (?P<message>.*)$'
+        timestamp:
+          parse_from: attributes.time
+          layout: '%Y-%m-%dT%H:%M:%S%z'
+        severity:
+          parse_from: attributes.level
+      - type: move
+        from: attributes.message
+        to: body
+    resource:
+      service.name: nginx
+
+  # Host metrics (CPU, memory, disk, network)
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      cpu:
+      memory:
+      disk:
+      network:
+      filesystem:
+      load:
+
+processors:
+  batch:
+    send_batch_size: 500
+    timeout: 5s
+
+  memory_limiter:
+    limit_mib: 128
+    spike_limit_mib: 32
+    check_interval: 5s
+
+  # Automatically adds host.name, os.type, etc. to all telemetry
+  resourcedetection:
+    detectors: [system, env]
+    timeout: 5s
+
+exporters:
+  zharp:
+    endpoint: "https://api.zharp.io/api/v1"
+    api_key: "YOUR_API_KEY_HERE"
+    timeout: 10s
+    batch_size: 500
+
+service:
+  extensions: [health_check]
+  pipelines:
+    logs:
+      receivers: [filelog]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [zharp]
