@@ -386,7 +386,7 @@ EOF
 
 # ── step 3: api key ───────────────────────────────────────────────────────────
 section "3 · API Key"
-dim "Get yours at: https://app.zharp.io/settings/api-keys"
+dim "Get yours at: https://zharp.io/settings/api-keys"
 echo
 ask "Paste your API key:"
 read -r API_KEY

@@ -70,7 +70,7 @@ func runSetupWizard(cfgPath string) {
 	fmt.Println()
 
 	// ── api key ───────────────────────────────────────────────────────────────
-	fmt.Println("  Get your API key at: https://app.zharp.io/settings/api-keys")
+	fmt.Println("  Get your API key at: https://zharp.io/settings/api-keys")
 	fmt.Println()
 	apiKey := ""
 	for apiKey == "" {

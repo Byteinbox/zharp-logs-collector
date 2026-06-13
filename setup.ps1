@@ -307,7 +307,7 @@ function configure_type($type) {
 
 # ── step 3: api key ──────────────────────────────────────────────────────────
 section "3 · API Key"
-dim "Get yours at: https://app.zharp.io/settings/api-keys"
+dim "Get yours at: https://zharp.io/settings/api-keys"
 Write-Host
 $API_KEY = ask "Paste your API key:"
 if (-not $API_KEY) { Write-Host "API key is required." -ForegroundColor Red; exit 1 }
