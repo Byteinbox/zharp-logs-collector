@@ -127,11 +127,43 @@ func buildConfigYAML(metricsReceivers []string, receiverBlocks []string, logSour
 }
 
 // filelogOperatorsBlock returns the YAML operators block for a filelog/<name>
-// receiver. Timestamp and severity parsing is handled on the backend at ingress
-// so the collector config stays simple and a bad regex never blocks log delivery.
+// receiver. Two timestamp-only regex_parser operators extract the datetime from
+// the start of each log line and set the OTel record Timestamp before the record
+// leaves the collector — avoiding a redundant regex pass on the backend.
+// Severity is intentionally NOT extracted here; mixing it in the same operator
+// caused pipeline errors when the second token was a hostname, not a level.
+// The backend still has a fallback for formats the collector cannot match
+// (time-only, date-only, or lines with no leading datetime at all).
 func filelogOperatorsBlock(name string) string {
 	var sb strings.Builder
 	sb.WriteString("    operators:\n")
+
+	// ISO 8601 T-separator: 2026-06-13T21:00:38.389230+00:00
+	sb.WriteString("      - type: regex_parser\n")
+	sb.WriteString("        regex: '^(?P<log_ts>\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?)'\n")
+	sb.WriteString("        timestamp:\n")
+	sb.WriteString("          parse_from: attributes.log_ts\n")
+	sb.WriteString("          layout_type: gotime\n")
+	sb.WriteString("          layout: '2006-01-02T15:04:05.999999999Z07:00'\n")
+	sb.WriteString("        on_error: send\n")
+	sb.WriteString("      - type: remove\n")
+	sb.WriteString("        field: attributes.log_ts\n")
+	sb.WriteString("        on_error: send\n")
+
+	// ISO 8601 space-separator: 2026-06-13 21:00:38.456
+	// No timezone in regex/layout — captured value is treated as UTC.
+	sb.WriteString("      - type: regex_parser\n")
+	sb.WriteString("        regex: '^(?P<log_ts2>\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?)'\n")
+	sb.WriteString("        timestamp:\n")
+	sb.WriteString("          parse_from: attributes.log_ts2\n")
+	sb.WriteString("          layout_type: gotime\n")
+	sb.WriteString("          layout: '2006-01-02 15:04:05.999999999'\n")
+	sb.WriteString("        on_error: send\n")
+	sb.WriteString("      - type: remove\n")
+	sb.WriteString("        field: attributes.log_ts2\n")
+	sb.WriteString("        on_error: send\n")
+
+	// Stamp the service name on every record regardless of whether above matched.
 	sb.WriteString("      - type: add\n")
 	sb.WriteString("        field: resource[\"service.name\"]\n")
 	fmt.Fprintf(&sb, "        value: %s\n", name)
