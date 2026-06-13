@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"runtime"
@@ -41,12 +42,29 @@ type zharpLogsExporter struct {
 	hostname string
 }
 
+// shared helpers used by both logs and metrics exporters
+var hostnameFunc = os.Hostname
+
+func defaultHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout}
+}
+
+func newRequest(ctx context.Context, url string, body io.Reader, apiKey string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
+	if err != nil {
+		return nil, fmt.Errorf("zharpexporter: create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-KEY", apiKey)
+	return req, nil
+}
+
 func newLogsExporter(cfg *Config, logger *zap.Logger) *zharpLogsExporter {
-	hostname, _ := os.Hostname()
+	hostname, _ := hostnameFunc()
 	return &zharpLogsExporter{
 		cfg:      cfg,
 		logger:   logger,
-		client:   &http.Client{Timeout: cfg.Timeout},
+		client:   defaultHTTPClient(cfg.Timeout),
 		hostname: hostname,
 	}
 }
@@ -144,12 +162,10 @@ func (e *zharpLogsExporter) ship(ctx context.Context, batch []logEntry) error {
 	}
 
 	url := fmt.Sprintf("%s/agent/logs/%s", defaultEndpoint, e.cfg.APIKey)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := newRequest(ctx, url, bytes.NewReader(body), e.cfg.APIKey)
 	if err != nil {
-		return fmt.Errorf("zharpexporter: create request: %w", err)
+		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-KEY", e.cfg.APIKey)
 
 	resp, err := e.client.Do(req)
 	if err != nil {
