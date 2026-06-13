@@ -452,7 +452,7 @@ New-Service `
     -Name $SVC_NAME `
     -DisplayName "Zharp Collector" `
     -Description "Zharp OpenTelemetry Collector agent" `
-    -BinaryPathName "`"$EXE_PATH`" --config `"$CONFIG_FILE`"" `
+    -BinaryPathName "`"$EXE_PATH`" --config `"file:$CONFIG_FILE`"" `
     -StartupType Automatic | Out-Null
 
 # Set restart-on-failure behaviour (3 attempts, 5 s delay each)
