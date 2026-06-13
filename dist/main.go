@@ -6,6 +6,7 @@ package main
 import (
 	"os"
 
+	zharpexporter "github.com/Byteinbox/zharp-logs-collector/zharpexporter"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/confmap"
 	envprovider "go.opentelemetry.io/collector/confmap/provider/envprovider"
@@ -16,11 +17,16 @@ import (
 	"go.opentelemetry.io/collector/otelcol"
 )
 
+// version is set at build time: -ldflags "-X main.version=vX.Y.Z"
+var version = "dev"
+
 func main() {
+	zharpexporter.AgentVersion = version
+
 	info := component.BuildInfo{
 		Command:     "zharp-collector",
 		Description: "Zharp OpenTelemetry Collector distribution",
-		Version:     "",
+		Version:     version,
 	}
 
 	set := otelcol.CollectorSettings{

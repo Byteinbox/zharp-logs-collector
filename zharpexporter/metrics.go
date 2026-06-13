@@ -81,7 +81,7 @@ func (e *zharpMetricsExporter) sendHeartbeat(ctx context.Context) {
 	payload := map[string]string{
 		"hostname": e.hostname,
 		"os":       runtime.GOOS,
-		"version":  agentVersion,
+		"version":  AgentVersion,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -123,7 +123,7 @@ func (e *zharpMetricsExporter) shipMetrics(ctx context.Context, batch []metricPo
 	p := metricsPayload{
 		Hostname: e.hostname,
 		OS:       runtime.GOOS,
-		Version:  agentVersion,
+		Version:  AgentVersion,
 		Metrics:  batch,
 	}
 	body, err := json.Marshal(p)

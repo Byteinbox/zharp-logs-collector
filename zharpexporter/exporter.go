@@ -18,7 +18,8 @@ import (
 	"go.uber.org/zap"
 )
 
-const agentVersion = "1.0.0"
+// AgentVersion is set at build time via -ldflags from dist/main.go.
+var AgentVersion = "dev"
 
 type logEntry struct {
 	Timestamp string         `json:"timestamp"`
@@ -152,7 +153,7 @@ func (e *zharpLogsExporter) ship(ctx context.Context, batch []logEntry) error {
 	p := ingestPayload{
 		Hostname: e.hostname,
 		OS:       runtime.GOOS,
-		Version:  agentVersion,
+		Version:  AgentVersion,
 		Logs:     batch,
 	}
 
