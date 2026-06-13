@@ -45,10 +45,11 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
         run: |
+          cd dist
           go build \
             -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
-            -o "zharp-collector-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" \
-            ./dist/
+            -o "../zharp-collector-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" \
+            .
 
       - name: Package (tar.gz for unix, zip for windows)
         run: |
