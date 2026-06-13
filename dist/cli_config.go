@@ -59,7 +59,7 @@ func buildConfigYAML(metricsReceivers []string, receiverBlocks []string, logSour
 
 	sb.WriteString("receivers:\n")
 	sb.WriteString("  hostmetrics:\n")
-	sb.WriteString("    collection_interval: 15s\n")
+	sb.WriteString("    collection_interval: 5s\n")
 	sb.WriteString("    scrapers:\n")
 	sb.WriteString("      cpu:\n")
 	sb.WriteString("      memory:\n")
