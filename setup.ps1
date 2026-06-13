@@ -128,7 +128,7 @@ $add_filelog   = $false
 $metrics_rcvrs = [System.Collections.Generic.List[string]]::new()
 $metrics_rcvrs.Add("hostmetrics")
 $extra_blocks  = [System.Text.StringBuilder]::new()
-$env_extras    = [System.Text.StringBuilder]::new()
+$svc_env_vars  = [System.Collections.Generic.List[string]]::new()  # KEY=VALUE pairs for service registry
 
 function show_menu {
     $options = [System.Collections.Generic.List[hashtable]]::new()
@@ -216,7 +216,7 @@ function configure_type($type) {
     tls:
       insecure: true
 "@)
-            $null = $env_extras.AppendLine("`$env:PG_PASSWORD = '$pass'")
+            $svc_env_vars.Add("PG_PASSWORD=$pass")
             $metrics_rcvrs.Add("postgresql")
             ok "PostgreSQL configured."
             warn "Required — run once as superuser:"
@@ -239,7 +239,7 @@ function configure_type($type) {
     password: "`${env:MYSQL_PASSWORD}"
     collection_interval: 30s
 "@)
-            $null = $env_extras.AppendLine("`$env:MYSQL_PASSWORD = '$pass'")
+            $svc_env_vars.Add("MYSQL_PASSWORD=$pass")
             $metrics_rcvrs.Add("mysql")
             ok "MySQL configured."
         }
@@ -257,7 +257,7 @@ function configure_type($type) {
     password: "`${env:REDIS_PASSWORD}"
     collection_interval: 30s
 "@)
-                $null = $env_extras.AppendLine("`$env:REDIS_PASSWORD = '$pass'")
+                $svc_env_vars.Add("REDIS_PASSWORD=$pass")
             } else {
                 $null = $extra_blocks.AppendLine(@"
 
@@ -287,7 +287,7 @@ function configure_type($type) {
     tls:
       insecure: true
 "@)
-            $null = $env_extras.AppendLine("`$env:MONGO_PASSWORD = '$pass'")
+            $svc_env_vars.Add("MONGO_PASSWORD=$pass")
             $metrics_rcvrs.Add("mongodb")
             ok "MongoDB configured."
         }
@@ -424,36 +424,35 @@ $pipelines
 Set-Content -Path $CONFIG_FILE -Value $config -Encoding utf8
 ok "Config -> $CONFIG_FILE"
 
-# write env file (loaded by the service wrapper)
-$envContent = "`$env:ZHARP_API_KEY = '$API_KEY'`n" + $env_extras.ToString()
-Set-Content -Path $ENV_FILE -Value $envContent -Encoding utf8
+# Write secrets as KEY=VALUE for reference (service reads them from registry, not this file)
+$envLines = [System.Collections.Generic.List[string]]::new()
+$envLines.Add("ZHARP_API_KEY=$API_KEY")
+foreach ($kv in $svc_env_vars) { $envLines.Add($kv) }
+Set-Content -Path $ENV_FILE -Value ($envLines -join "`n") -Encoding utf8
 ok "Secrets -> $ENV_FILE"
 
 # ── step 6: windows service ──────────────────────────────────────────────────
 section "6 · Installing Windows service"
-
-# Wrapper script that loads env then starts the collector
-$wrapper = "$CONFIG_DIR\start.ps1"
-Set-Content -Path $wrapper -Value @"
-. '$ENV_FILE'
-& '$EXE_PATH' --config '$CONFIG_FILE'
-"@ -Encoding utf8
 
 # Remove existing service if present
 $existing = Get-Service -Name $SVC_NAME -ErrorAction SilentlyContinue
 if ($existing) {
     Stop-Service -Name $SVC_NAME -Force -ErrorAction SilentlyContinue
     sc.exe delete $SVC_NAME | Out-Null
-    Start-Sleep -Seconds 1
+    Start-Sleep -Seconds 2
 }
 
-$pwsh = (Get-Command powershell.exe).Source
-New-Service `
-    -Name $SVC_NAME `
-    -DisplayName "Zharp Collector" `
-    -Description "Zharp OpenTelemetry Collector agent" `
-    -BinaryPathName "`"$pwsh`" -NonInteractive -NoProfile -File `"$wrapper`"" `
-    -StartupType Automatic | Out-Null
+# Register the collector exe directly as a Windows service.
+# The binary already implements the Windows Service Control Manager protocol.
+$binPath = "`"$EXE_PATH`" --config `"$CONFIG_FILE`""
+sc.exe create $SVC_NAME binPath= $binPath start= auto DisplayName= "Zharp Collector" | Out-Null
+sc.exe description $SVC_NAME "Zharp OpenTelemetry Collector agent" | Out-Null
+sc.exe failure $SVC_NAME reset= 86400 actions= restart/5000/restart/5000/restart/5000 | Out-Null
+
+# Store environment variables in the service's registry key so they are
+# available to the process when Windows starts it (no wrapper script needed).
+$regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$SVC_NAME"
+Set-ItemProperty -Path $regPath -Name "Environment" -Value $envLines.ToArray() -Type MultiString
 
 Start-Service -Name $SVC_NAME
 Start-Sleep -Seconds 2
@@ -462,7 +461,8 @@ $svc = Get-Service -Name $SVC_NAME
 if ($svc.Status -eq "Running") {
     ok "Service started."
 } else {
-    warn "Service did not start. Check: Get-EventLog -LogName Application -Source $SVC_NAME -Newest 10"
+    warn "Service did not start. Check logs:"
+    dim "Get-EventLog -LogName System -Source 'Service Control Manager' -Newest 20 | Format-List"
 }
 
 # ── done ──────────────────────────────────────────────────────────────────────
