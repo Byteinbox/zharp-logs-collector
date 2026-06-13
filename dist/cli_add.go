@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"os"
@@ -280,8 +281,80 @@ func parseAddArgs(svcType string, args []string) (receiver, block string, logSou
 	return receiver, block, logSources, envVars, nil
 }
 
-// detectServiceFromFile peeks at the first few lines of a log file to infer
-// the service type. Falls back to the file's basename without extension.
+// knownLogLevels is the set of recognised level tokens (lowercase, no decorators).
+var knownLogLevels = map[string]bool{
+	"trace": true, "debug": true, "info": true, "notice": true,
+	"warn": true, "warning": true, "error": true, "err": true,
+	"fatal": true, "crit": true, "critical": true, "panic": true,
+}
+
+// stripDecor removes surrounding [], (), whitespace and a trailing colon.
+func stripDecor(s string) string {
+	s = strings.Trim(s, "[](): \t")
+	return strings.TrimSuffix(s, ":")
+}
+
+// isDatetimeToken returns true if s starts with an ISO date (YYYY-MM-DD...).
+func isDatetimeToken(s string) bool {
+	if len(s) < 10 {
+		return false
+	}
+	// Quick digit check before compiling regex.
+	matched, _ := regexp.MatchString(`^\d{4}-\d{2}-\d{2}`, s)
+	return matched
+}
+
+// isTimeToken returns true if s starts with HH:MM:SS (space-separated time field).
+func isTimeToken(s string) bool {
+	matched, _ := regexp.MatchString(`^\d{2}:\d{2}:\d{2}`, s)
+	return matched
+}
+
+// isLevelToken returns true if s (after stripping decorators) is a known log level.
+func isLevelToken(s string) bool {
+	return knownLogLevels[strings.ToLower(stripDecor(s))]
+}
+
+// cleanServiceToken strips process-ID suffixes ("nginx[1234]:") and decorators.
+func cleanServiceToken(s string) string {
+	s = regexp.MustCompile(`\[\d+\]:?$`).ReplaceAllString(s, "")
+	return stripDecor(s)
+}
+
+// detectServiceFromLine parses a single log line looking for the pattern:
+//
+//	<datetime> <level> <service> ...         (single-token datetime)
+//	<date> <time> <level> <service> ...      (space-separated date+time)
+//
+// Returns the service name, or "" if the line doesn't match either pattern.
+func detectServiceFromLine(line string) string {
+	fields := strings.Fields(line)
+
+	// Pattern 1: single-token ISO datetime
+	// e.g.  2026-06-13T19:05:03Z  INFO  myapp  Starting server
+	//        [2026-06-13T19:05:03] [WARN] [api] upstream timeout
+	if len(fields) >= 3 && isDatetimeToken(stripDecor(fields[0])) && isLevelToken(fields[1]) {
+		name := cleanServiceToken(fields[2])
+		if name != "" {
+			return name
+		}
+	}
+
+	// Pattern 2: space-separated date + time
+	// e.g.  2026-06-13 19:05:03.456  ERROR  payment-svc  dial tcp refused
+	if len(fields) >= 4 && isDatetimeToken(stripDecor(fields[0])) && isTimeToken(fields[1]) && isLevelToken(fields[2]) {
+		name := cleanServiceToken(fields[3])
+		if name != "" {
+			return name
+		}
+	}
+
+	return ""
+}
+
+// detectServiceFromFile reads up to 10 non-empty lines and returns the service
+// name from the first line that matches the structured log pattern.
+// Falls back to the file's basename without extension.
 func detectServiceFromFile(path string) string {
 	f, err := os.Open(path)
 	if err != nil {
@@ -289,25 +362,18 @@ func detectServiceFromFile(path string) string {
 	}
 	defer f.Close()
 
-	buf := make([]byte, 4096)
-	n, _ := f.Read(buf)
-	if n == 0 {
-		return fileBasename(path)
+	checked := 0
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() && checked < 10 {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		checked++
+		if name := detectServiceFromLine(line); name != "" {
+			return sanitizeServiceName(name)
+		}
 	}
-	firstLine := strings.SplitN(string(buf[:n]), "\n", 2)[0]
-
-	// Syslog: "Jun 13 19:05:03 host process[pid]:" or ISO timestamp variant
-	if matched, _ := regexp.MatchString(`^[A-Z][a-z]{2}\s+\d+ \d+:\d+:\d+ \S+ \S`, firstLine); matched {
-		return "syslog"
-	}
-	if matched, _ := regexp.MatchString(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.*\s+\S+\[\d+\]:`, firstLine); matched {
-		return "syslog"
-	}
-	// nginx/Apache CLF: "1.2.3.4 - - [13/Jun/2026:19:05:03 +0000] "GET ..."
-	if matched, _ := regexp.MatchString(`^\d+\.\d+\.\d+\.\d+ - .+ \[`, firstLine); matched {
-		return "nginx"
-	}
-
 	return fileBasename(path)
 }
 
