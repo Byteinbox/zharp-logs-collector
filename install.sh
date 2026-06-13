@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Zharp Collector — guided installer
-# Detects services, prompts for API key, generates config, installs systemd service.
 set -euo pipefail
 
 REPO="Byteinbox/zharp-logs-collector"
@@ -13,21 +12,17 @@ SERVICE_NAME="zharp-collector"
 # ── colours ───────────────────────────────────────────────────────────────────
 if [ -t 1 ]; then
   BOLD="\033[1m"; GREEN="\033[0;32m"; YELLOW="\033[1;33m"
-  BLUE="\033[0;34m"; DIM="\033[2m"; NC="\033[0m"
+  BLUE="\033[0;34m"; CYAN="\033[0;36m"; DIM="\033[2m"; NC="\033[0m"
 else
-  BOLD=""; GREEN=""; YELLOW=""; BLUE=""; DIM=""; NC=""
+  BOLD=""; GREEN=""; YELLOW=""; BLUE=""; CYAN=""; DIM=""; NC=""
 fi
-info()    { echo -e "  ${BLUE}→${NC} $*"; }
-ok()      { echo -e "  ${GREEN}✓${NC} $*"; }
-warn()    { echo -e "  ${YELLOW}!${NC} $*"; }
+ok()      { echo -e "  ${GREEN}✓${NC}  $*"; }
+info()    { echo -e "  ${BLUE}→${NC}  $*"; }
+warn()    { echo -e "  ${YELLOW}!${NC}  $*"; }
+dim()     { echo -e "     ${DIM}$*${NC}"; }
 section() { echo; echo -e "${BOLD}$*${NC}"; echo; }
-ask()     { echo -e -n "  ${BOLD}?${NC} $* "; }
-
-confirm() {
-  ask "$1 [Y/n]:"
-  local ans; read -r ans
-  [[ -z "$ans" || "$ans" =~ ^[Yy] ]]
-}
+hr()      { echo -e "  ${DIM}──────────────────────────────────────────────────${NC}"; }
+ask()     { echo -e -n "  ${CYAN}?${NC}  ${BOLD}$*${NC} "; }
 
 # ── platform ──────────────────────────────────────────────────────────────────
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -40,41 +35,36 @@ esac
 [[ "$OS" != "linux" && "$OS" != "darwin" ]] && {
   echo "For Windows download from: https://github.com/$REPO/releases/latest" >&2; exit 1; }
 
-# ── helpers ───────────────────────────────────────────────────────────────────
-is_active() { systemctl is-active --quiet "$1" 2>/dev/null; }
-has_cmd()   { command -v "$1" &>/dev/null; }
-file_or_dir_exists() { [[ -e "$1" ]]; }
+has_cmd() { command -v "$1" &>/dev/null; }
+is_svc()  { systemctl is-active --quiet "$1" 2>/dev/null; }
+path_ok() { [[ -e "$1" ]]; }
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-touch "$TMP/env_extras"     # db passwords written here
-touch "$TMP/receivers.yaml" # receiver blocks appended here
-touch "$TMP/log_includes"   # one log path per line
-LOG_PIPELINE=false
-DB_RECEIVER_NAMES=()
-EXTRA_RECEIVER_NAMES=()
+touch "$TMP/env_extras"
+touch "$TMP/receiver_blocks"
+LOG_PATHS=()
+ADD_FILELOG=false
+METRICS_RECEIVERS=("hostmetrics")
 
 # ── banner ────────────────────────────────────────────────────────────────────
 echo
-echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BOLD}       Zharp Collector  —  Guided Installer        ${NC}"
-echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo
-echo -e "  This will detect your services, build a config,"
-echo -e "  and start the collector in about 2 minutes."
+echo -e "${BOLD}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BOLD}       Zharp Collector  ·  Guided Setup            ${NC}"
+echo -e "${BOLD}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo
 
 # ── step 1: api key ───────────────────────────────────────────────────────────
-section "Step 1 of 5 — API Key"
-echo -e "  Get your key from: ${BLUE}https://app.zharp.io/settings/api-keys${NC}"
+section "1 · API Key"
+dim "Get yours at: https://app.zharp.io/settings/api-keys"
 echo
-ask "Paste your Zharp API key:"
+ask "Paste your API key:"
 read -r API_KEY
 [[ -z "$API_KEY" ]] && { echo "API key is required." >&2; exit 1; }
-ok "API key received."
+ok "API key saved."
 
 # ── step 2: install binary ────────────────────────────────────────────────────
-section "Step 2 of 5 — Download & install binary"
+section "2 · Installing binary"
 
 if has_cmd curl; then   FETCH="curl -sSfL"
 elif has_cmd wget; then FETCH="wget -qO-"
@@ -86,7 +76,7 @@ if [[ -z "$VERSION" ]]; then
   VERSION=$($FETCH "https://api.github.com/repos/$REPO/releases/latest" \
     | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\(.*\)".*/\1/')
 fi
-[[ -z "$VERSION" ]] && { warn "Could not resolve version. Set ZHARP_VERSION=v1.x.x and retry."; exit 1; }
+[[ -z "$VERSION" ]] && { warn "Set ZHARP_VERSION=v1.x.x and retry."; exit 1; }
 
 info "Downloading zharp-collector $VERSION ($OS/$ARCH)..."
 ARCHIVE="zharp-collector-${VERSION}-${OS}-${ARCH}.tar.gz"
@@ -95,243 +85,393 @@ tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
 install -m 755 "$TMP/zharp-collector-${OS}-${ARCH}" "$INSTALL_DIR/zharp-collector"
 ok "Installed → $INSTALL_DIR/zharp-collector"
 
-# ── step 3: detect services ───────────────────────────────────────────────────
-section "Step 3 of 5 — Detect running services"
-echo -e "  ${DIM}Scanning for nginx, Apache, databases, Docker…${NC}"
-echo
+# ── step 3: scan ─────────────────────────────────────────────────────────────
+section "3 · Scanning this server..."
 
-# ── host metrics (always on) ──────────────────────────────────────────────────
-ok "Host metrics (CPU / memory / disk / network) — always enabled"
+# All available options — parallel arrays
+# Each entry: LABEL | TYPE | DETAIL | IS_DETECTED
+ALL_LABELS=()
+ALL_TYPES=()
+ALL_DETAILS=()
+ALL_DETECTED=()   # "yes" or "no"
 
-# ── docker ────────────────────────────────────────────────────────────────────
+add_option() {
+  ALL_LABELS+=("$1")
+  ALL_TYPES+=("$2")
+  ALL_DETAILS+=("$3")
+  ALL_DETECTED+=("$4")   # "yes" = auto-detected, "no" = manual add
+}
+
+# Auto-detected services
+if path_ok /var/log/nginx/access.log || is_svc nginx || has_cmd nginx; then
+  NPATHS="/var/log/nginx/access.log"
+  path_ok /var/log/nginx/error.log && NPATHS+=" + error.log"
+  add_option "nginx"          "nginx_log"  "logs at $NPATHS"           "yes"
+fi
+
+if path_ok /var/log/apache2/access.log || path_ok /var/log/httpd/access_log \
+    || is_svc apache2 || is_svc httpd; then
+  APD=$( path_ok /var/log/apache2/access.log && echo /var/log/apache2/ || echo /var/log/httpd/ )
+  add_option "Apache"         "apache_log" "logs at $APD"              "yes"
+fi
+
+if path_ok /var/log/syslog || path_ok /var/log/messages; then
+  add_option "System logs"    "syslog"     "/var/log/syslog, auth.log" "yes"
+fi
+
+if has_cmd psql || is_svc postgresql || is_svc postgres; then
+  add_option "PostgreSQL"     "pg"         "detected on localhost:5432" "yes"
+fi
+
+if has_cmd mysql || is_svc mysql || is_svc mysqld || is_svc mariadb; then
+  add_option "MySQL / MariaDB" "mysql"     "detected on localhost:3306" "yes"
+fi
+
+if has_cmd redis-cli || is_svc redis || is_svc redis-server; then
+  add_option "Redis"          "redis"      "detected on localhost:6379" "yes"
+fi
+
+if has_cmd mongosh || has_cmd mongo || is_svc mongod; then
+  add_option "MongoDB"        "mongo"      "detected on localhost:27017" "yes"
+fi
+
 if has_cmd docker && docker info &>/dev/null 2>&1; then
-  if confirm "Found Docker — monitor container CPU/memory/network per container?"; then
-    cat >> "$TMP/receivers.yaml" <<'EOF'
+  CNT=$(docker ps -q 2>/dev/null | wc -l | tr -d ' ')
+  add_option "Docker"         "docker"     "$CNT container(s) running"  "yes"
+fi
+
+# Always-available manual options (not yet detected)
+# We'll only show them if they weren't already auto-detected
+type_detected() {
+  local t="$1"
+  for i in "${!ALL_TYPES[@]}"; do
+    [[ "${ALL_TYPES[$i]}" == "$t" ]] && return 0
+  done
+  return 1
+}
+
+type_detected nginx_log  || add_option "nginx logs"     "nginx_log"  "tail nginx access/error log"  "no"
+type_detected apache_log || add_option "Apache logs"    "apache_log" "tail Apache access log"       "no"
+type_detected syslog     || add_option "System logs"    "syslog"     "/var/log/syslog, auth.log"    "no"
+type_detected pg         || add_option "PostgreSQL"     "pg"         "database metrics"             "no"
+type_detected mysql      || add_option "MySQL / MariaDB" "mysql"     "database metrics"             "no"
+type_detected redis      || add_option "Redis"          "redis"      "in-memory store metrics"      "no"
+type_detected mongo      || add_option "MongoDB"        "mongo"      "database metrics"             "no"
+type_detected docker     || add_option "Docker"         "docker"     "container metrics"            "no"
+add_option "Custom log file" "custom_log" "any log path or glob pattern"    "no"
+
+# Track which indices have been configured
+DONE_INDICES=()
+
+is_done() {
+  local idx="$1"
+  for d in "${DONE_INDICES[@]+"${DONE_INDICES[@]}"}"; do
+    [[ "$d" == "$idx" ]] && return 0
+  done
+  return 1
+}
+
+# ── show_menu: print available options, return how many were shown ─────────────
+show_menu() {
+  local row=0
+
+  # Detected section
+  local has_detected=false
+  for i in "${!ALL_LABELS[@]}"; do
+    [[ "${ALL_DETECTED[$i]}" == "yes" ]] && is_done "$i" && continue
+    [[ "${ALL_DETECTED[$i]}" == "yes" ]] && { has_detected=true; break; }
+  done
+
+  if $has_detected; then
+    echo -e "  ${BOLD}Detected on this server:${NC}"
+    hr
+    for i in "${!ALL_LABELS[@]}"; do
+      [[ "${ALL_DETECTED[$i]}" != "yes" ]] && continue
+      is_done "$i" && continue
+      row=$(( row + 1 ))
+      printf "  ${CYAN}[%d]${NC}  %-24s ${DIM}%s${NC}\n" \
+        "$row" "${ALL_LABELS[$i]}" "${ALL_DETAILS[$i]}"
+      MENU_MAP[$row]=$i
+    done
+  fi
+
+  # Manual / not detected section
+  local has_manual=false
+  for i in "${!ALL_LABELS[@]}"; do
+    [[ "${ALL_DETECTED[$i]}" == "no" ]] && is_done "$i" && continue
+    [[ "${ALL_DETECTED[$i]}" == "no" ]] && { has_manual=true; break; }
+  done
+
+  if $has_manual; then
+    [[ $row -gt 0 ]] && echo
+    echo -e "  ${BOLD}Add manually:${NC}"
+    hr
+    for i in "${!ALL_LABELS[@]}"; do
+      [[ "${ALL_DETECTED[$i]}" != "no" ]] && continue
+      is_done "$i" && continue
+      row=$(( row + 1 ))
+      printf "  ${CYAN}[%d]${NC}  %-24s ${DIM}%s${NC}\n" \
+        "$row" "${ALL_LABELS[$i]}" "${ALL_DETAILS[$i]}"
+      MENU_MAP[$row]=$i
+    done
+  fi
+
+  MENU_ROWS=$row
+}
+
+# ── configure: given a type, collect settings ──────────────────────────────────
+configure_type() {
+  local TYPE="$1"
+  echo
+
+  case "$TYPE" in
+    nginx_log)
+      echo -e "  ${BOLD}nginx — log paths${NC}"
+      ask "Access log [/var/log/nginx/access.log]:"
+      read -r P; P="${P:-/var/log/nginx/access.log}"
+      LOG_PATHS+=("$P")
+      ask "Error log  [/var/log/nginx/error.log]  (blank to skip):"
+      read -r E
+      [[ -n "$E" ]] && LOG_PATHS+=("$E")
+      [[ -z "$E" ]] && path_ok /var/log/nginx/error.log && LOG_PATHS+=("/var/log/nginx/error.log")
+      ADD_FILELOG=true
+      ok "nginx logs configured."
+      ;;
+
+    apache_log)
+      echo -e "  ${BOLD}Apache — log path${NC}"
+      DEFAULT=/var/log/apache2/access.log
+      path_ok /var/log/httpd/access_log && DEFAULT=/var/log/httpd/access_log
+      ask "Access log [$DEFAULT]:"
+      read -r P; P="${P:-$DEFAULT}"
+      LOG_PATHS+=("$P")
+      ADD_FILELOG=true
+      ok "Apache logs configured."
+      ;;
+
+    syslog)
+      path_ok /var/log/syslog   && LOG_PATHS+=("/var/log/syslog")
+      path_ok /var/log/messages && LOG_PATHS+=("/var/log/messages")
+      path_ok /var/log/auth.log && LOG_PATHS+=("/var/log/auth.log")
+      ADD_FILELOG=true
+      ok "System logs configured."
+      ;;
+
+    custom_log)
+      echo -e "  ${BOLD}Custom log paths${NC}"
+      dim "Glob patterns OK: /var/log/myapp/*.log"
+      dim "Press Enter on a blank line when done."
+      echo
+      while true; do
+        ask "Log path (blank to finish):"
+        read -r P; [[ -z "$P" ]] && break
+        LOG_PATHS+=("$P"); ok "Added: $P"
+      done
+      ADD_FILELOG=true
+      ;;
+
+    pg)
+      echo -e "  ${BOLD}PostgreSQL${NC}"
+      ask "Host   [localhost]:"        ; read -r H; H="${H:-localhost}"
+      ask "Port   [5432]:"             ; read -r PT; PT="${PT:-5432}"
+      ask "User   [zharp_monitor]:"    ; read -r U; U="${U:-zharp_monitor}"
+      ask "Password:"                  ; read -rs PASS; echo
+      ask "Database [postgres]:"       ; read -r DB; DB="${DB:-postgres}"
+      cat >> "$TMP/receiver_blocks" <<EOF
+
+  postgresql:
+    endpoint: ${H}:${PT}
+    username: ${U}
+    password: \${env:PG_PASSWORD}
+    databases:
+      - ${DB}
+    collection_interval: 30s
+    tls:
+      insecure: true
+EOF
+      echo "PG_PASSWORD=${PASS}" >> "$TMP/env_extras"
+      METRICS_RECEIVERS+=("postgresql")
+      ok "PostgreSQL configured."
+      echo
+      warn "Required — run once as superuser:"
+      dim "CREATE USER ${U} WITH PASSWORD 'your_password';"
+      dim "GRANT pg_monitor TO ${U};"
+      ;;
+
+    mysql)
+      echo -e "  ${BOLD}MySQL / MariaDB${NC}"
+      ask "Host   [localhost]:"        ; read -r H; H="${H:-localhost}"
+      ask "Port   [3306]:"             ; read -r PT; PT="${PT:-3306}"
+      ask "User   [zharp_monitor]:"    ; read -r U; U="${U:-zharp_monitor}"
+      ask "Password:"                  ; read -rs PASS; echo
+      cat >> "$TMP/receiver_blocks" <<EOF
+
+  mysql:
+    endpoint: ${H}:${PT}
+    username: ${U}
+    password: \${env:MYSQL_PASSWORD}
+    collection_interval: 30s
+EOF
+      echo "MYSQL_PASSWORD=${PASS}" >> "$TMP/env_extras"
+      METRICS_RECEIVERS+=("mysql")
+      ok "MySQL configured."
+      echo
+      warn "Required — run once as root:"
+      dim "CREATE USER '${U}'@'localhost' IDENTIFIED BY 'your_password';"
+      dim "GRANT PROCESS, REPLICATION CLIENT, SELECT ON *.* TO '${U}'@'localhost';"
+      dim "FLUSH PRIVILEGES;"
+      ;;
+
+    redis)
+      echo -e "  ${BOLD}Redis${NC}"
+      ask "Endpoint [localhost:6379]:" ; read -r EP; EP="${EP:-localhost:6379}"
+      ask "Password (blank if none):"  ; read -rs PASS; echo
+      if [[ -n "$PASS" ]]; then
+        cat >> "$TMP/receiver_blocks" <<EOF
+
+  redis:
+    endpoint: ${EP}
+    password: \${env:REDIS_PASSWORD}
+    collection_interval: 30s
+EOF
+        echo "REDIS_PASSWORD=${PASS}" >> "$TMP/env_extras"
+      else
+        cat >> "$TMP/receiver_blocks" <<EOF
+
+  redis:
+    endpoint: ${EP}
+    collection_interval: 30s
+EOF
+      fi
+      METRICS_RECEIVERS+=("redis")
+      ok "Redis configured."
+      ;;
+
+    mongo)
+      echo -e "  ${BOLD}MongoDB${NC}"
+      ask "Endpoint [localhost:27017]:" ; read -r EP; EP="${EP:-localhost:27017}"
+      ask "User   [zharp_monitor]:"     ; read -r U; U="${U:-zharp_monitor}"
+      ask "Password:"                   ; read -rs PASS; echo
+      cat >> "$TMP/receiver_blocks" <<EOF
+
+  mongodb:
+    hosts:
+      - endpoint: ${EP}
+    username: ${U}
+    password: \${env:MONGO_PASSWORD}
+    collection_interval: 30s
+    tls:
+      insecure: true
+EOF
+      echo "MONGO_PASSWORD=${PASS}" >> "$TMP/env_extras"
+      METRICS_RECEIVERS+=("mongodb")
+      ok "MongoDB configured."
+      echo
+      warn "Required — run once in mongosh as admin:"
+      dim "db.createUser({ user: '${U}', pwd: 'your_password',"
+      dim "  roles: [{ role: 'clusterMonitor', db: 'admin' }] })"
+      ;;
+
+    docker)
+      cat >> "$TMP/receiver_blocks" <<'EOF'
 
   docker_stats:
     endpoint: unix:///var/run/docker.sock
     collection_interval: 30s
     timeout: 20s
 EOF
-    EXTRA_RECEIVER_NAMES+=("docker_stats")
-    ok "Docker container metrics enabled"
-  fi
-fi
-
-# ── step 4: log files ─────────────────────────────────────────────────────────
-section "Step 4 of 5 — Log files"
-echo -e "  We'll check for common log paths. Say Y to tail them, N to skip."
-echo
-
-add_log() {
-  local label="$1" path="$2" svc="$3"
-  if file_or_dir_exists "$path"; then
-    if confirm "Found ${label} logs at ${path} — monitor them?"; then
-      echo "$path" >> "$TMP/log_includes"
-      ok "$label logs added"
-    fi
-  fi
+      METRICS_RECEIVERS+=("docker_stats")
+      ok "Docker container metrics configured."
+      ;;
+  esac
 }
 
-add_log "nginx access"   "/var/log/nginx/access.log"   "nginx"
-add_log "nginx error"    "/var/log/nginx/error.log"    "nginx"
-add_log "Apache access"  "/var/log/apache2/access.log" "apache"
-add_log "Apache access"  "/var/log/httpd/access_log"   "apache"
-add_log "syslog"         "/var/log/syslog"             "system"
-add_log "auth.log"       "/var/log/auth.log"           "system"
-add_log "system messages" "/var/log/messages"          "system"
-
+# ── step 4: interactive selection loop ────────────────────────────────────────
+section "4 · What do you want to monitor?"
+echo -e "  ${DIM}Host metrics (CPU, memory, disk, network) are always collected.${NC}"
 echo
-if confirm "Add custom log paths (app logs, etc.)?"; then
-  echo -e "  ${DIM}Glob patterns supported: /var/log/myapp/*.log${NC}"
-  echo -e "  ${DIM}Press Enter on a blank line when done.${NC}"
+
+while true; do
+  declare -A MENU_MAP=()
+  MENU_ROWS=0
+  show_menu
+
+  if [[ $MENU_ROWS -eq 0 ]]; then
+    ok "All available services configured."
+    break
+  fi
+
   echo
-  while true; do
-    ask "Log path (blank to finish):"
-    read -r CPATH
-    [[ -z "$CPATH" ]] && break
-    echo "$CPATH" >> "$TMP/log_includes"
-    ok "Added: $CPATH"
-  done
-fi
+  ask "Pick a number to configure, or press Enter to finish:"
+  read -r PICK
 
-if [[ -s "$TMP/log_includes" ]]; then
-  LOG_PIPELINE=true
-fi
+  # Enter with no input = done
+  [[ -z "$PICK" ]] && break
 
-# ── step 5: databases ─────────────────────────────────────────────────────────
-section "Step 5 of 5 — Database monitoring"
-echo -e "  Database receivers pull metrics directly from your DB (connections,"
-echo -e "  query rates, cache hit ratios, replication lag, etc.)."
-echo -e "  ${DIM}They need a read-only monitoring user — setup commands are shown below.${NC}"
-echo
-
-# ── postgresql ────────────────────────────────────────────────────────────────
-if has_cmd psql || is_active postgresql || is_active postgres; then
-  if confirm "Found PostgreSQL — monitor it?"; then
-    ask "Host [localhost]:"        ; read -r PG_HOST; PG_HOST="${PG_HOST:-localhost}"
-    ask "Port [5432]:"             ; read -r PG_PORT; PG_PORT="${PG_PORT:-5432}"
-    ask "Monitoring user [zharp_monitor]:" ; read -r PG_USER; PG_USER="${PG_USER:-zharp_monitor}"
-    ask "Password:"                ; read -rs PG_PASS; echo
-    ask "Database name [postgres]:"; read -r PG_DB;   PG_DB="${PG_DB:-postgres}"
-    cat >> "$TMP/receivers.yaml" <<EOF
-
-  postgresql:
-    endpoint: ${PG_HOST}:${PG_PORT}
-    username: ${PG_USER}
-    password: \${env:PG_PASSWORD}
-    databases:
-      - ${PG_DB}
-    collection_interval: 30s
-    tls:
-      insecure: true
-EOF
-    echo "PG_PASSWORD=${PG_PASS}" >> "$TMP/env_extras"
-    DB_RECEIVER_NAMES+=("postgresql")
-    ok "PostgreSQL added"
+  # Validate input
+  if ! [[ "$PICK" =~ ^[0-9]+$ ]] || (( PICK < 1 )) || (( PICK > MENU_ROWS )); then
+    warn "Enter a number between 1 and $MENU_ROWS, or press Enter to finish."
     echo
-    warn "Run once in psql as superuser to create the monitoring user:"
-    echo -e "  ${DIM}CREATE USER ${PG_USER} WITH PASSWORD 'your_password';${NC}"
-    echo -e "  ${DIM}GRANT pg_monitor TO ${PG_USER};${NC}"
-    echo
+    continue
   fi
-fi
 
-# ── mysql ─────────────────────────────────────────────────────────────────────
-if has_cmd mysql || is_active mysql || is_active mysqld; then
-  if confirm "Found MySQL — monitor it?"; then
-    ask "Host [localhost]:"; read -r MY_HOST; MY_HOST="${MY_HOST:-localhost}"
-    ask "Port [3306]:"     ; read -r MY_PORT; MY_PORT="${MY_PORT:-3306}"
-    ask "Monitoring user [zharp_monitor]:" ; read -r MY_USER; MY_USER="${MY_USER:-zharp_monitor}"
-    ask "Password:"        ; read -rs MY_PASS; echo
-    cat >> "$TMP/receivers.yaml" <<EOF
+  REAL_IDX="${MENU_MAP[$PICK]}"
+  SELECTED_TYPE="${ALL_TYPES[$REAL_IDX]}"
+  SELECTED_LABEL="${ALL_LABELS[$REAL_IDX]}"
 
-  mysql:
-    endpoint: ${MY_HOST}:${MY_PORT}
-    username: ${MY_USER}
-    password: \${env:MYSQL_PASSWORD}
-    collection_interval: 30s
-EOF
-    echo "MYSQL_PASSWORD=${MY_PASS}" >> "$TMP/env_extras"
-    DB_RECEIVER_NAMES+=("mysql")
-    ok "MySQL added"
-    echo
-    warn "Run once in MySQL as root to create the monitoring user:"
-    echo -e "  ${DIM}CREATE USER '${MY_USER}'@'localhost' IDENTIFIED BY 'your_password';${NC}"
-    echo -e "  ${DIM}GRANT PROCESS, REPLICATION CLIENT, SELECT ON *.* TO '${MY_USER}'@'localhost';${NC}"
-    echo -e "  ${DIM}FLUSH PRIVILEGES;${NC}"
-    echo
-  fi
-fi
+  echo
+  echo -e "  ${BOLD}Configuring: $SELECTED_LABEL${NC}"
+  configure_type "$SELECTED_TYPE"
+  DONE_INDICES+=("$REAL_IDX")
 
-# ── redis ─────────────────────────────────────────────────────────────────────
-if has_cmd redis-cli || is_active redis || is_active redis-server; then
-  if confirm "Found Redis — monitor it?"; then
-    ask "Endpoint [localhost:6379]:" ; read -r RD_HOST; RD_HOST="${RD_HOST:-localhost:6379}"
-    ask "Password (blank if none):"  ; read -rs RD_PASS; echo
-    if [[ -n "$RD_PASS" ]]; then
-      cat >> "$TMP/receivers.yaml" <<EOF
+  echo
+  ask "Monitor another service? [Y/n]:"
+  read -r MORE
+  [[ "$MORE" =~ ^[Nn] ]] && break
+  echo
+done
 
-  redis:
-    endpoint: ${RD_HOST}
-    password: \${env:REDIS_PASSWORD}
-    collection_interval: 30s
-EOF
-      echo "REDIS_PASSWORD=${RD_PASS}" >> "$TMP/env_extras"
-    else
-      cat >> "$TMP/receivers.yaml" <<EOF
-
-  redis:
-    endpoint: ${RD_HOST}
-    collection_interval: 30s
-EOF
-    fi
-    DB_RECEIVER_NAMES+=("redis")
-    ok "Redis added"
-  fi
-fi
-
-# ── mongodb ───────────────────────────────────────────────────────────────────
-if has_cmd mongosh || has_cmd mongo || is_active mongod; then
-  if confirm "Found MongoDB — monitor it?"; then
-    ask "Endpoint [localhost:27017]:"  ; read -r MG_HOST; MG_HOST="${MG_HOST:-localhost:27017}"
-    ask "Monitoring user [zharp_monitor]:" ; read -r MG_USER; MG_USER="${MG_USER:-zharp_monitor}"
-    ask "Password:"                    ; read -rs MG_PASS; echo
-    cat >> "$TMP/receivers.yaml" <<EOF
-
-  mongodb:
-    hosts:
-      - endpoint: ${MG_HOST}
-    username: ${MG_USER}
-    password: \${env:MONGO_PASSWORD}
-    collection_interval: 30s
-    tls:
-      insecure: true
-EOF
-    echo "MONGO_PASSWORD=${MG_PASS}" >> "$TMP/env_extras"
-    DB_RECEIVER_NAMES+=("mongodb")
-    ok "MongoDB added"
-    echo
-    warn "Run once in mongosh as admin to create the monitoring user:"
-    echo -e "  ${DIM}db.createUser({ user: '${MG_USER}', pwd: 'your_password', roles: [{ role: 'clusterMonitor', db: 'admin' }] })${NC}"
-    echo
-  fi
-fi
-
-# ── generate config ───────────────────────────────────────────────────────────
-section "Generating config → $CONFIG_FILE"
+# ── step 5: generate config ───────────────────────────────────────────────────
+section "5 · Writing config"
 mkdir -p "$CONFIG_DIR"
 
-# Build the filelog receiver block if any log paths were added
 FILELOG_BLOCK=""
-if [[ "$LOG_PIPELINE" == true ]]; then
+if [[ "$ADD_FILELOG" == true ]] && [[ ${#LOG_PATHS[@]} -gt 0 ]]; then
   FILELOG_BLOCK="  filelog:
     include:"
-  while IFS= read -r logpath; do
+  for p in "${LOG_PATHS[@]}"; do
     FILELOG_BLOCK+="
-      - ${logpath}"
-  done < "$TMP/log_includes"
+      - ${p}"
+  done
   FILELOG_BLOCK+="
     include_file_path: true
     include_file_name: false
 "
 fi
 
-# Build extra receivers block (docker, databases)
-EXTRA_RECEIVERS=""
-if [[ -s "$TMP/receivers.yaml" ]]; then
-  EXTRA_RECEIVERS="$(cat "$TMP/receivers.yaml")"
-fi
+EXTRA_BLOCKS=""
+[[ -s "$TMP/receiver_blocks" ]] && EXTRA_BLOCKS="$(cat "$TMP/receiver_blocks")"
 
-# Build metrics pipeline receivers list
-METRICS_RECEIVERS="hostmetrics"
-for name in "${EXTRA_RECEIVER_NAMES[@]+"${EXTRA_RECEIVER_NAMES[@]}"}"; do
-  METRICS_RECEIVERS+=", $name"
-done
-for name in "${DB_RECEIVER_NAMES[@]+"${DB_RECEIVER_NAMES[@]}"}"; do
-  METRICS_RECEIVERS+=", $name"
-done
-
-# Build pipelines section
 PIPELINES="  pipelines:"
-if [[ "$LOG_PIPELINE" == true ]]; then
+if [[ "$ADD_FILELOG" == true ]]; then
   PIPELINES+="
     logs:
       receivers: [filelog]
       processors: [memory_limiter, resourcedetection, batch]
       exporters: [zharp]"
 fi
+printf -v METRICS_LIST '%s, ' "${METRICS_RECEIVERS[@]}"
+METRICS_LIST="${METRICS_LIST%, }"
 PIPELINES+="
     metrics:
-      receivers: [$METRICS_RECEIVERS]
+      receivers: [${METRICS_LIST}]
       processors: [memory_limiter, resourcedetection, batch]
       exporters: [zharp]"
 
 cat > "$CONFIG_FILE" <<EOF
 ## Zharp Collector config — generated $(date '+%Y-%m-%d %H:%M')
-## Edit this file to add more log paths or services, then:
-##   sudo systemctl restart zharp-collector
-## Full docs: https://github.com/Byteinbox/zharp-logs-collector
+## To add more: edit this file then run: sudo systemctl restart zharp-collector
+## Docs: https://github.com/Byteinbox/zharp-logs-collector
 
 extensions:
   health_check:
@@ -347,7 +487,7 @@ receivers:
       network:
       load:
 
-${FILELOG_BLOCK}${EXTRA_RECEIVERS}
+${FILELOG_BLOCK}${EXTRA_BLOCKS}
 processors:
   batch:
     send_batch_size: 500
@@ -368,24 +508,19 @@ service:
   extensions: [health_check]
 ${PIPELINES}
 EOF
+ok "Config → $CONFIG_FILE"
 
-ok "Config written"
-
-# ── write env file ────────────────────────────────────────────────────────────
-{
-  echo "ZHARP_API_KEY=${API_KEY}"
-  cat "$TMP/env_extras"
-} > "$ENV_FILE"
+{ echo "ZHARP_API_KEY=${API_KEY}"; cat "$TMP/env_extras"; } > "$ENV_FILE"
 chmod 600 "$ENV_FILE"
-ok "Credentials written to $ENV_FILE"
+ok "Secrets → $ENV_FILE"
 
-# ── systemd (linux only) ──────────────────────────────────────────────────────
+# ── step 6: systemd ───────────────────────────────────────────────────────────
 if [[ "$OS" == "linux" ]] && has_cmd systemctl; then
   if ! id -u "$SERVICE_NAME" &>/dev/null; then
     useradd --system --no-create-home --shell /sbin/nologin "$SERVICE_NAME"
-    usermod -aG adm              "$SERVICE_NAME" 2>/dev/null || true
-    usermod -aG systemd-journal  "$SERVICE_NAME" 2>/dev/null || true
-    usermod -aG docker           "$SERVICE_NAME" 2>/dev/null || true
+    usermod -aG adm             "$SERVICE_NAME" 2>/dev/null || true
+    usermod -aG systemd-journal "$SERVICE_NAME" 2>/dev/null || true
+    usermod -aG docker          "$SERVICE_NAME" 2>/dev/null || true
   fi
   chown -R "$SERVICE_NAME:$SERVICE_NAME" "$CONFIG_DIR"
 
@@ -413,28 +548,24 @@ UNIT
   systemctl daemon-reload
   systemctl enable --now "$SERVICE_NAME"
   sleep 2
-
-  if is_active "$SERVICE_NAME"; then
-    ok "Service is running"
-  else
-    warn "Service may have failed. Check with: journalctl -fu zharp-collector"
-  fi
+  is_svc "$SERVICE_NAME" \
+    && ok "Service started." \
+    || warn "Check logs: journalctl -fu zharp-collector"
 fi
 
 # ── done ──────────────────────────────────────────────────────────────────────
 echo
-echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}${BOLD}  All done! Zharp Collector is running.${NC}"
-echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BOLD}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}${BOLD}    Done! Zharp Collector is running.${NC}"
+echo -e "${BOLD}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo
-echo -e "  ${BOLD}Config:${NC}   $CONFIG_FILE"
-echo -e "  ${BOLD}Secrets:${NC}  $ENV_FILE"
+echo -e "  ${BOLD}Config:${NC}  $CONFIG_FILE"
+echo -e "  ${BOLD}Secrets:${NC} $ENV_FILE"
 echo
-echo -e "  ${BOLD}Useful commands:${NC}"
-echo -e "  ${DIM}sudo systemctl status  zharp-collector${NC}"
-echo -e "  ${DIM}sudo journalctl     -fu zharp-collector${NC}"
-echo -e "  ${DIM}sudo nano $CONFIG_FILE${NC}"
-echo -e "  ${DIM}sudo systemctl restart zharp-collector${NC}"
+dim "sudo systemctl status  zharp-collector"
+dim "sudo journalctl     -fu zharp-collector"
+dim "sudo nano $CONFIG_FILE"
+dim "sudo systemctl restart zharp-collector"
 echo
 echo -e "  Data will appear in your Zharp dashboard within a minute."
 echo
