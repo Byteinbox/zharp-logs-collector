@@ -193,7 +193,6 @@ Get-Service ZharpCollector
 docker run -d \
   --name zharp-collector \
   --restart unless-stopped \
-  -e ZHARP_ENDPOINT=https://api.zharp.io/api/v1 \
   -e ZHARP_API_KEY=your_api_key_here \
   -v /var/log:/var/log:ro \
   -v /proc:/hostfs/proc:ro \
@@ -223,7 +222,6 @@ services:
     image: ghcr.io/Byteinbox/zharp-logs-collector:latest
     restart: unless-stopped
     environment:
-      ZHARP_ENDPOINT: https://api.zharp.io/api/v1
       ZHARP_API_KEY: ${ZHARP_API_KEY}
     volumes:
       - ./zharp-collector.yaml:/etc/zharp-collector/config.yaml:ro
@@ -250,7 +248,6 @@ kubectl create namespace zharp-system
 
 kubectl create secret generic zharp-collector-secret \
   --namespace zharp-system \
-  --from-literal=endpoint=https://api.zharp.io/api/v1 \
   --from-literal=api-key=your_api_key_here
 ```
 
@@ -307,7 +304,6 @@ receivers:
 
 exporters:
   zharp:
-    endpoint: "https://api.zharp.io/api/v1"
     api_key: "YOUR_API_KEY"
 
 service:
@@ -457,7 +453,7 @@ exporters:
     api_key: "${env:ZHARP_API_KEY}"
 ```
 
-On Linux with systemd, put secrets in `/etc/zharp-collector/env`:
+On Linux with systemd, put your API key in `/etc/zharp-collector/env`:
 
 ```bash
 # /etc/zharp-collector/env

@@ -35,16 +35,12 @@ spec:
           args:
             - --config=/etc/zharp-collector/config.yaml
           env:
-            - name: ZHARP_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: zharp-collector-secret
-                  key: endpoint
             - name: ZHARP_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: zharp-collector-secret
                   key: api-key
+
             # Expose node name for resourcedetection k8snode detector
             - name: K8S_NODE_NAME
               valueFrom:

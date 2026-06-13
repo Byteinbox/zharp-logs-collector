@@ -26,6 +26,7 @@ func createDefaultConfig() component.Config {
 	}
 }
 
+
 func createLogsExporter(
 	ctx context.Context,
 	set exporter.Settings,

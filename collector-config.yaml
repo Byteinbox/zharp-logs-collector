@@ -51,10 +51,7 @@ processors:
 
 exporters:
   zharp:
-    endpoint: "https://api.zharp.io/api/v1"
     api_key: "YOUR_API_KEY_HERE"
-    timeout: 10s
-    batch_size: 500
 
 service:
   extensions: [health_check]
