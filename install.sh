@@ -39,7 +39,6 @@ if [[ "$_UNAME" =~ MINGW|MSYS|CYGWIN ]]; then
   echo
   echo -e "${BOLD}  Windows detected — launching PowerShell setup...${NC}"
   echo
-  # setup.ps1 next to this script (local run) or fetched from GitHub (curl pipe)
   PS1_LOCAL="$(dirname "$0")/setup.ps1"
   if [[ -f "$PS1_LOCAL" ]]; then
     powershell.exe -ExecutionPolicy Bypass -NoProfile -File "$(cygpath -w "$PS1_LOCAL")"
@@ -72,17 +71,8 @@ echo -e "${BOLD}       Zharp Collector  ·  Guided Setup            ${NC}"
 echo -e "${BOLD}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo
 
-# ── step 1: api key ───────────────────────────────────────────────────────────
-section "1 · API Key"
-dim "Get yours at: https://app.zharp.io/settings/api-keys"
-echo
-ask "Paste your API key:"
-read -r API_KEY
-[[ -z "$API_KEY" ]] && { echo "API key is required." >&2; exit 1; }
-ok "API key saved."
-
-# ── step 2: install binary ────────────────────────────────────────────────────
-section "2 · Installing binary"
+# ── step 1: download binary ───────────────────────────────────────────────────
+section "1 · Downloading collector"
 
 if has_cmd curl; then   FETCH="curl -sSfL"
 elif has_cmd wget; then FETCH="wget -qO-"
@@ -103,63 +93,58 @@ tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
 install -m 755 "$TMP/zharp-collector-${OS}-${ARCH}" "$INSTALL_DIR/zharp-collector"
 ok "Installed → $INSTALL_DIR/zharp-collector"
 
-# ── step 3: scan ─────────────────────────────────────────────────────────────
-section "3 · Scanning this server..."
+# ── step 2: scan ─────────────────────────────────────────────────────────────
+section "2 · Scanning this server..."
 
-# All available options — parallel arrays
-# Each entry: LABEL | TYPE | DETAIL | IS_DETECTED
 ALL_LABELS=()
 ALL_TYPES=()
 ALL_DETAILS=()
-ALL_DETECTED=()   # "yes" or "no"
+ALL_DETECTED=()
 
 add_option() {
   ALL_LABELS+=("$1")
   ALL_TYPES+=("$2")
   ALL_DETAILS+=("$3")
-  ALL_DETECTED+=("$4")   # "yes" = auto-detected, "no" = manual add
+  ALL_DETECTED+=("$4")
 }
 
-# Auto-detected services
 if path_ok /var/log/nginx/access.log || is_svc nginx || has_cmd nginx; then
   NPATHS="/var/log/nginx/access.log"
   path_ok /var/log/nginx/error.log && NPATHS+=" + error.log"
-  add_option "nginx"          "nginx_log"  "logs at $NPATHS"           "yes"
+  add_option "nginx"           "nginx_log"  "logs at $NPATHS"            "yes"
 fi
 
 if path_ok /var/log/apache2/access.log || path_ok /var/log/httpd/access_log \
     || is_svc apache2 || is_svc httpd; then
   APD=$( path_ok /var/log/apache2/access.log && echo /var/log/apache2/ || echo /var/log/httpd/ )
-  add_option "Apache"         "apache_log" "logs at $APD"              "yes"
+  add_option "Apache"          "apache_log" "logs at $APD"               "yes"
 fi
 
 if path_ok /var/log/syslog || path_ok /var/log/messages; then
-  add_option "System logs"    "syslog"     "/var/log/syslog, auth.log" "yes"
+  add_option "System logs"     "syslog"     "/var/log/syslog, auth.log"  "yes"
 fi
 
 if has_cmd psql || is_svc postgresql || is_svc postgres; then
-  add_option "PostgreSQL"     "pg"         "detected on localhost:5432" "yes"
+  add_option "PostgreSQL"      "pg"         "detected on localhost:5432"  "yes"
 fi
 
 if has_cmd mysql || is_svc mysql || is_svc mysqld || is_svc mariadb; then
-  add_option "MySQL / MariaDB" "mysql"     "detected on localhost:3306" "yes"
+  add_option "MySQL / MariaDB" "mysql"      "detected on localhost:3306"  "yes"
 fi
 
 if has_cmd redis-cli || is_svc redis || is_svc redis-server; then
-  add_option "Redis"          "redis"      "detected on localhost:6379" "yes"
+  add_option "Redis"           "redis"      "detected on localhost:6379"  "yes"
 fi
 
 if has_cmd mongosh || has_cmd mongo || is_svc mongod; then
-  add_option "MongoDB"        "mongo"      "detected on localhost:27017" "yes"
+  add_option "MongoDB"         "mongo"      "detected on localhost:27017" "yes"
 fi
 
 if has_cmd docker && docker info &>/dev/null 2>&1; then
   CNT=$(docker ps -q 2>/dev/null | wc -l | tr -d ' ')
-  add_option "Docker"         "docker"     "$CNT container(s) running"  "yes"
+  add_option "Docker"          "docker"     "$CNT container(s) running"   "yes"
 fi
 
-# Always-available manual options (not yet detected)
-# We'll only show them if they weren't already auto-detected
 type_detected() {
   local t="$1"
   for i in "${!ALL_TYPES[@]}"; do
@@ -168,17 +153,16 @@ type_detected() {
   return 1
 }
 
-type_detected nginx_log  || add_option "nginx logs"     "nginx_log"  "tail nginx access/error log"  "no"
-type_detected apache_log || add_option "Apache logs"    "apache_log" "tail Apache access log"       "no"
-type_detected syslog     || add_option "System logs"    "syslog"     "/var/log/syslog, auth.log"    "no"
-type_detected pg         || add_option "PostgreSQL"     "pg"         "database metrics"             "no"
-type_detected mysql      || add_option "MySQL / MariaDB" "mysql"     "database metrics"             "no"
-type_detected redis      || add_option "Redis"          "redis"      "in-memory store metrics"      "no"
-type_detected mongo      || add_option "MongoDB"        "mongo"      "database metrics"             "no"
-type_detected docker     || add_option "Docker"         "docker"     "container metrics"            "no"
-add_option "Custom log file" "custom_log" "any log path or glob pattern"    "no"
+type_detected nginx_log  || add_option "nginx logs"      "nginx_log"  "tail nginx access/error log"  "no"
+type_detected apache_log || add_option "Apache logs"     "apache_log" "tail Apache access log"       "no"
+type_detected syslog     || add_option "System logs"     "syslog"     "/var/log/syslog, auth.log"    "no"
+type_detected pg         || add_option "PostgreSQL"      "pg"         "database metrics"             "no"
+type_detected mysql      || add_option "MySQL / MariaDB" "mysql"      "database metrics"             "no"
+type_detected redis      || add_option "Redis"           "redis"      "in-memory store metrics"      "no"
+type_detected mongo      || add_option "MongoDB"         "mongo"      "database metrics"             "no"
+type_detected docker     || add_option "Docker"          "docker"     "container metrics"            "no"
+add_option "Custom log file" "custom_log" "any log path or glob pattern"  "no"
 
-# Track which indices have been configured
 DONE_INDICES=()
 
 is_done() {
@@ -189,11 +173,9 @@ is_done() {
   return 1
 }
 
-# ── show_menu: print available options, return how many were shown ─────────────
 show_menu() {
   local row=0
 
-  # Detected section
   local has_detected=false
   for i in "${!ALL_LABELS[@]}"; do
     [[ "${ALL_DETECTED[$i]}" == "yes" ]] && is_done "$i" && continue
@@ -213,7 +195,6 @@ show_menu() {
     done
   fi
 
-  # Manual / not detected section
   local has_manual=false
   for i in "${!ALL_LABELS[@]}"; do
     [[ "${ALL_DETECTED[$i]}" == "no" ]] && is_done "$i" && continue
@@ -237,7 +218,6 @@ show_menu() {
   MENU_ROWS=$row
 }
 
-# ── configure: given a type, collect settings ──────────────────────────────────
 configure_type() {
   local TYPE="$1"
   echo
@@ -290,11 +270,11 @@ configure_type() {
 
     pg)
       echo -e "  ${BOLD}PostgreSQL${NC}"
-      ask "Host   [localhost]:"        ; read -r H; H="${H:-localhost}"
-      ask "Port   [5432]:"             ; read -r PT; PT="${PT:-5432}"
-      ask "User   [zharp_monitor]:"    ; read -r U; U="${U:-zharp_monitor}"
-      ask "Password:"                  ; read -rs PASS; echo
-      ask "Database [postgres]:"       ; read -r DB; DB="${DB:-postgres}"
+      ask "Host   [localhost]:"     ; read -r H;    H="${H:-localhost}"
+      ask "Port   [5432]:"          ; read -r PT;   PT="${PT:-5432}"
+      ask "User   [zharp_monitor]:" ; read -r U;    U="${U:-zharp_monitor}"
+      ask "Password:"               ; read -rs PASS; echo
+      ask "Database [postgres]:"    ; read -r DB;   DB="${DB:-postgres}"
       cat >> "$TMP/receiver_blocks" <<EOF
 
   postgresql:
@@ -318,10 +298,10 @@ EOF
 
     mysql)
       echo -e "  ${BOLD}MySQL / MariaDB${NC}"
-      ask "Host   [localhost]:"        ; read -r H; H="${H:-localhost}"
-      ask "Port   [3306]:"             ; read -r PT; PT="${PT:-3306}"
-      ask "User   [zharp_monitor]:"    ; read -r U; U="${U:-zharp_monitor}"
-      ask "Password:"                  ; read -rs PASS; echo
+      ask "Host   [localhost]:"     ; read -r H;    H="${H:-localhost}"
+      ask "Port   [3306]:"          ; read -r PT;   PT="${PT:-3306}"
+      ask "User   [zharp_monitor]:" ; read -r U;    U="${U:-zharp_monitor}"
+      ask "Password:"               ; read -rs PASS; echo
       cat >> "$TMP/receiver_blocks" <<EOF
 
   mysql:
@@ -368,7 +348,7 @@ EOF
     mongo)
       echo -e "  ${BOLD}MongoDB${NC}"
       ask "Endpoint [localhost:27017]:" ; read -r EP; EP="${EP:-localhost:27017}"
-      ask "User   [zharp_monitor]:"     ; read -r U; U="${U:-zharp_monitor}"
+      ask "User   [zharp_monitor]:"     ; read -r U;  U="${U:-zharp_monitor}"
       ask "Password:"                   ; read -rs PASS; echo
       cat >> "$TMP/receiver_blocks" <<EOF
 
@@ -404,7 +384,16 @@ EOF
   esac
 }
 
-# ── step 4: interactive selection loop ────────────────────────────────────────
+# ── step 3: api key ───────────────────────────────────────────────────────────
+section "3 · API Key"
+dim "Get yours at: https://app.zharp.io/settings/api-keys"
+echo
+ask "Paste your API key:"
+read -r API_KEY
+[[ -z "$API_KEY" ]] && { echo "API key is required." >&2; exit 1; }
+ok "API key saved."
+
+# ── step 4: what to monitor ───────────────────────────────────────────────────
 section "4 · What do you want to monitor?"
 echo -e "  ${DIM}Host metrics (CPU, memory, disk, network) are always collected.${NC}"
 echo
@@ -423,14 +412,11 @@ while true; do
   ask "Pick a number to configure, or press Enter to finish:"
   read -r PICK
 
-  # Enter with no input = done
   [[ -z "$PICK" ]] && break
 
-  # Validate input
   if ! [[ "$PICK" =~ ^[0-9]+$ ]] || (( PICK < 1 )) || (( PICK > MENU_ROWS )); then
     warn "Enter a number between 1 and $MENU_ROWS, or press Enter to finish."
-    echo
-    continue
+    echo; continue
   fi
 
   REAL_IDX="${MENU_MAP[$PICK]}"
@@ -489,7 +475,6 @@ PIPELINES+="
 cat > "$CONFIG_FILE" <<EOF
 ## Zharp Collector config — generated $(date '+%Y-%m-%d %H:%M')
 ## To add more: edit this file then run: sudo systemctl restart zharp-collector
-## Docs: https://github.com/Byteinbox/zharp-logs-collector
 
 extensions:
   health_check:

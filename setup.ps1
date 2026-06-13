@@ -35,16 +35,8 @@ Write-Host "       Zharp Collector  ·  Windows Setup           " -ForegroundCol
 Write-Host "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor White
 Write-Host
 
-# ── step 1: api key ───────────────────────────────────────────────────────────
-section "1 · API Key"
-dim "Get yours at: https://app.zharp.io/settings/api-keys"
-Write-Host
-$API_KEY = ask "Paste your API key:"
-if (-not $API_KEY) { Write-Host "API key is required." -ForegroundColor Red; exit 1 }
-ok "API key saved."
-
-# ── step 2: install binary ────────────────────────────────────────────────────
-section "2 · Installing binary"
+# ── step 1: install binary ───────────────────────────────────────────────────
+section "1 · Downloading collector"
 
 $VERSION = $env:ZHARP_VERSION
 if (-not $VERSION) {
@@ -62,8 +54,8 @@ New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
 Invoke-WebRequest -Uri $URL -OutFile $EXE_PATH -UseBasicParsing
 ok "Installed -> $EXE_PATH"
 
-# ── step 3: detect running services ───────────────────────────────────────────
-section "3 · Scanning this server..."
+# ── step 2: detect running services ───────────────────────────────────────────
+section "2 · Scanning this server..."
 
 $detected    = [System.Collections.Generic.List[hashtable]]::new()
 $manual      = [System.Collections.Generic.List[hashtable]]::new()
@@ -313,6 +305,14 @@ function configure_type($type) {
     }
 }
 
+# ── step 3: api key ──────────────────────────────────────────────────────────
+section "3 · API Key"
+dim "Get yours at: https://app.zharp.io/settings/api-keys"
+Write-Host
+$API_KEY = ask "Paste your API key:"
+if (-not $API_KEY) { Write-Host "API key is required." -ForegroundColor Red; exit 1 }
+ok "API key saved."
+
 # ── step 4: selection loop ────────────────────────────────────────────────────
 section "4 · What do you want to monitor?"
 dim "Host metrics (CPU, memory, disk, network) are always collected."
@@ -345,7 +345,7 @@ while ($true) {
     Write-Host
 }
 
-# ── step 5: write config ──────────────────────────────────────────────────────
+# ── step 5: write config ─────────────────────────────────────────────────────
 section "5 · Writing config"
 New-Item -ItemType Directory -Force -Path $CONFIG_DIR | Out-Null
 
@@ -429,7 +429,7 @@ $envContent = "`$env:ZHARP_API_KEY = '$API_KEY'`n" + $env_extras.ToString()
 Set-Content -Path $ENV_FILE -Value $envContent -Encoding utf8
 ok "Secrets -> $ENV_FILE"
 
-# ── step 6: windows service ───────────────────────────────────────────────────
+# ── step 6: windows service ──────────────────────────────────────────────────
 section "6 · Installing Windows service"
 
 # Wrapper script that loads env then starts the collector
