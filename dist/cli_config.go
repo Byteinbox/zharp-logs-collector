@@ -76,11 +76,7 @@ func buildConfigYAML(metricsReceivers []string, receiverBlocks []string, logSour
 		}
 		sb.WriteString("    include_file_path: true\n")
 		sb.WriteString("    include_file_name: false\n")
-		sb.WriteString("    operators:\n")
-		sb.WriteString("      - type: add\n")
-		sb.WriteString(`        field: resource["service.name"]`)
-		sb.WriteString("\n")
-		fmt.Fprintf(&sb, "        value: %s\n", src.Name)
+		sb.WriteString(filelogOperatorsBlock(src.Name))
 	}
 
 	// Additional metric receiver blocks.
@@ -127,5 +123,55 @@ func buildConfigYAML(metricsReceivers []string, receiverBlocks []string, logSour
 	sb.WriteString("      processors: [memory_limiter, resourcedetection, batch]\n")
 	sb.WriteString("      exporters: [zharp]\n")
 
+	return sb.String()
+}
+
+// filelogOperatorsBlock returns the YAML operators block for a filelog/<name>
+// receiver. The operators (all with on_error: send so non-matching lines pass
+// through unchanged):
+//
+//  1. regex_parser — ISO 8601 with T separator: "2006-01-02T15:04:05..."
+//     Sets the OTel log record timestamp and severity.
+//  2. regex_parser — ISO 8601 with space separator: "2006-01-02 15:04:05..."
+//     Sets the OTel log record timestamp and severity.
+//  3-6. remove — cleans up the temp parse attributes so they don't show as metadata.
+//  7. add — stamps resource["service.name"] with the given name.
+func filelogOperatorsBlock(name string) string {
+	var sb strings.Builder
+	sb.WriteString("    operators:\n")
+
+	// Pattern: 2026-06-13T20:41:43.825743+00:00 INFO myapp ...
+	sb.WriteString("      - type: regex_parser\n")
+	sb.WriteString("        regex: '^(?P<log_ts>\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?)[ \\t]+(?P<log_sev>[A-Za-z]+)'\n")
+	sb.WriteString("        timestamp:\n")
+	sb.WriteString("          parse_from: attributes.log_ts\n")
+	sb.WriteString("          layout_type: gotime\n")
+	sb.WriteString("          layout: '2006-01-02T15:04:05.999999999Z07:00'\n")
+	sb.WriteString("        severity:\n")
+	sb.WriteString("          parse_from: attributes.log_sev\n")
+	sb.WriteString("        on_error: send\n")
+
+	// Pattern: 2026-06-13 20:41:43.456 WARN myapp ...
+	sb.WriteString("      - type: regex_parser\n")
+	sb.WriteString("        regex: '^(?P<log_ts2>\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?)[ \\t]+(?P<log_sev2>[A-Za-z]+)'\n")
+	sb.WriteString("        timestamp:\n")
+	sb.WriteString("          parse_from: attributes.log_ts2\n")
+	sb.WriteString("          layout_type: gotime\n")
+	sb.WriteString("          layout: '2006-01-02 15:04:05.999999999'\n")
+	sb.WriteString("        severity:\n")
+	sb.WriteString("          parse_from: attributes.log_sev2\n")
+	sb.WriteString("        on_error: send\n")
+
+	// Remove temp parse attributes so they don't appear as log metadata.
+	for _, field := range []string{"log_ts", "log_ts2", "log_sev", "log_sev2"} {
+		sb.WriteString("      - type: remove\n")
+		fmt.Fprintf(&sb, "        field: attributes.%s\n", field)
+		sb.WriteString("        on_error: send\n")
+	}
+
+	// Stamp the service name on the resource (shows as service in the dashboard).
+	sb.WriteString("      - type: add\n")
+	sb.WriteString("        field: resource[\"service.name\"]\n")
+	fmt.Fprintf(&sb, "        value: %s\n", name)
 	return sb.String()
 }

@@ -499,10 +499,7 @@ func addLogSourcesToConfig(configFile string, sources []LogSource) error {
 			}
 			block += "    include_file_path: true\n"
 			block += "    include_file_name: false\n"
-			block += "    operators:\n"
-			block += "      - type: add\n"
-			block += "        field: resource[\"service.name\"]\n"
-			block += "        value: " + src.Name + "\n"
+			block += filelogOperatorsBlock(src.Name)
 
 			content = strings.Replace(content, "\nprocessors:", "\n"+block+"\nprocessors:", 1)
 		}

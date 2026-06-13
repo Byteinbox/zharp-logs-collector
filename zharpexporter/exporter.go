@@ -120,8 +120,17 @@ func (e *zharpLogsExporter) convertLogs(ld plog.Logs) []logEntry {
 			for k := 0; k < sl.LogRecords().Len(); k++ {
 				lr := sl.LogRecords().At(k)
 
-				ts := lr.Timestamp().AsTime()
-				if ts.IsZero() {
+				// Prefer the log record's own timestamp (set by regex_parser operator).
+				// Fall back to observed timestamp (when the file line was read).
+				// lr.Timestamp() == 0 means the operator never set it; AsTime() would
+				// return Unix epoch (1970) which IsZero() does NOT catch.
+				var ts time.Time
+				switch {
+				case lr.Timestamp() != 0:
+					ts = lr.Timestamp().AsTime()
+				case lr.ObservedTimestamp() != 0:
+					ts = lr.ObservedTimestamp().AsTime()
+				default:
 					ts = time.Now().UTC()
 				}
 
