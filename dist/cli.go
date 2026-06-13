@@ -15,6 +15,9 @@ func handleSubcommand() bool {
 	case "install":
 		cliInstall()
 		return true
+	case "add":
+		cliAdd()
+		return true
 	case "start":
 		if err := svcStart(); err != nil {
 			fmt.Fprintf(os.Stderr, "  [!] start failed: %v\n", err)
@@ -24,6 +27,12 @@ func handleSubcommand() bool {
 	case "stop":
 		if err := svcStop(); err != nil {
 			fmt.Fprintf(os.Stderr, "  [!] stop failed: %v\n", err)
+			os.Exit(1)
+		}
+		return true
+	case "restart":
+		if err := svcRestart(); err != nil {
+			fmt.Fprintf(os.Stderr, "  [!] restart failed: %v\n", err)
 			os.Exit(1)
 		}
 		return true
@@ -55,12 +64,26 @@ func cliHelp() {
 	fmt.Println("  Usage: zharp-collector <subcommand>")
 	fmt.Println()
 	fmt.Println("  Subcommands:")
-	fmt.Println("    install    Guided setup wizard — installs config and system service")
-	fmt.Println("    start      Start the zharp-collector system service")
-	fmt.Println("    stop       Stop the zharp-collector system service")
-	fmt.Println("    status     Show service status")
-	fmt.Println("    logs       Tail service logs")
-	fmt.Println("    uninstall  Remove service and config")
+	fmt.Println("    install              Guided setup — installs config and system service")
+	fmt.Println("    add <type> [flags]   Add a monitoring target to the running config")
+	fmt.Println("    start                Start the system service")
+	fmt.Println("    stop                 Stop the system service")
+	fmt.Println("    restart              Restart the system service")
+	fmt.Println("    status               Show service status")
+	fmt.Println("    logs                 Tail service logs")
+	fmt.Println("    uninstall            Remove service and config")
+	fmt.Println()
+	fmt.Println("  add types:")
+	fmt.Println("    postgres  --host HOST --port PORT --user USER --password PASS --db DB")
+	fmt.Println("    mysql     --host HOST --port PORT --user USER --password PASS")
+	fmt.Println("    redis     --endpoint HOST:PORT [--password PASS]")
+	fmt.Println("    mongo     --endpoint HOST:PORT --user USER --password PASS")
+	fmt.Println("    docker")
+	fmt.Println("    nginx     --access-log PATH [--error-log PATH]")
+	fmt.Println("    apache    --access-log PATH")
+	fmt.Println("    syslog")
+	fmt.Println("    iis       --log-folder PATH")
+	fmt.Println("    logs      --path PATH  (repeat for multiple files)")
 	fmt.Println()
 	fmt.Println("  Without a subcommand the collector daemon runs directly.")
 	fmt.Println()

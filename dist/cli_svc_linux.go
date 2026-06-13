@@ -105,6 +105,11 @@ func svcUninstall() error {
 	return nil
 }
 
+// svcRestart restarts the systemd service.
+func svcRestart() error {
+	return exec.Command("systemctl", "restart", "zharp-collector").Run()
+}
+
 // printDoneCommands prints useful post-install commands for Linux.
 func printDoneCommands() {
 	uiDimMsg("sudo systemctl status zharp-collector")

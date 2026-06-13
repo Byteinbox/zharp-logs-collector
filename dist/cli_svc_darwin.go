@@ -113,6 +113,12 @@ func svcUninstall() error {
 	return nil
 }
 
+// svcRestart reloads the launchd daemon.
+func svcRestart() error {
+	exec.Command("launchctl", "unload", "-w", plistFile).Run() //nolint:errcheck
+	return exec.Command("launchctl", "load", "-w", plistFile).Run()
+}
+
 // printDoneCommands prints useful post-install commands for macOS.
 func printDoneCommands() {
 	uiDimMsg("sudo launchctl list " + launchdLabel)

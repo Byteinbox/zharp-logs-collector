@@ -122,6 +122,13 @@ func svcUninstall() error {
 	return nil
 }
 
+// svcRestart stops then starts the Windows service.
+func svcRestart() error {
+	exec.Command("sc.exe", "stop", winSvcName).Run() //nolint:errcheck
+	time.Sleep(2 * time.Second)
+	return exec.Command("sc.exe", "start", winSvcName).Run()
+}
+
 // printDoneCommands prints useful post-install commands for Windows.
 func printDoneCommands() {
 	uiDimMsg("Get-Service " + winSvcName)
