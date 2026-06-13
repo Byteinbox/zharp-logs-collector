@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -15,7 +16,7 @@ import (
 //
 //	zharp-collector add postgres --host localhost --port 5432 --user zharp_monitor --password secret --db myapp
 //	zharp-collector add docker
-//	zharp-collector add logs --path /var/log/myapp/app.log --path /var/log/myapp/error.log
+//	zharp-collector add logs --path /var/log/myapp/app.log --service myapp
 func cliAdd() {
 	if runtime.GOOS != "windows" && os.Getuid() != 0 {
 		fmt.Fprintln(os.Stderr, "  [!] This command must be run as root. Try: sudo zharp-collector add")
@@ -40,9 +41,8 @@ func cliAdd() {
 		os.Exit(1)
 	}
 
-	// Parse flags for this type.
-	args := os.Args[3:] // everything after the type
-	receiver, block, logPaths, envVars, err := parseAddArgs(svcType, args)
+	args := os.Args[3:]
+	receiver, block, logSources, envVars, err := parseAddArgs(svcType, args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  [!] %v\n", err)
 		fmt.Fprintln(os.Stderr)
@@ -50,7 +50,7 @@ func cliAdd() {
 		os.Exit(1)
 	}
 
-	applyAddition(configFile, envFile, receiver, block, logPaths, envVars)
+	applyAddition(configFile, envFile, receiver, block, logSources, envVars)
 
 	uiInfo("Restarting service to apply changes...")
 	if err := svcRestart(); err != nil {
@@ -63,7 +63,7 @@ func cliAdd() {
 }
 
 // parseAddArgs parses flags for the given type and returns the receiver config.
-func parseAddArgs(svcType string, args []string) (receiver, block string, logPaths []string, envVars map[string]string, err error) {
+func parseAddArgs(svcType string, args []string) (receiver, block string, logSources []LogSource, envVars map[string]string, err error) {
 	envVars = map[string]string{}
 	fs := flag.NewFlagSet("add "+svcType, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -187,6 +187,7 @@ func parseAddArgs(svcType string, args []string) (receiver, block string, logPat
 `, endpoint)
 
 	case "nginx_log":
+		svcName := fs.String("service", "nginx", "")
 		accessLog := fs.String("access-log", "", "")
 		errorLog := fs.String("error-log", "", "")
 		if e := fs.Parse(args); e != nil {
@@ -203,12 +204,14 @@ func parseAddArgs(svcType string, args []string) (receiver, block string, logPat
 				*accessLog = "/var/log/nginx/access.log"
 			}
 		}
-		logPaths = append(logPaths, *accessLog)
+		paths := []string{*accessLog}
 		if *errorLog != "" {
-			logPaths = append(logPaths, *errorLog)
+			paths = append(paths, *errorLog)
 		}
+		logSources = []LogSource{{Name: sanitizeServiceName(*svcName), Paths: paths}}
 
 	case "apache_log":
+		svcName := fs.String("service", "apache", "")
 		accessLog := fs.String("access-log", "", "")
 		if e := fs.Parse(args); e != nil {
 			err = e
@@ -221,24 +224,28 @@ func parseAddArgs(svcType string, args []string) (receiver, block string, logPat
 				*accessLog = "/var/log/apache2/access.log"
 			}
 		}
-		logPaths = append(logPaths, *accessLog)
+		logSources = []LogSource{{Name: sanitizeServiceName(*svcName), Paths: []string{*accessLog}}}
 
 	case "syslog":
+		svcName := fs.String("service", "syslog", "")
 		if e := fs.Parse(args); e != nil {
 			err = e
 			return
 		}
+		var paths []string
 		for _, p := range []string{"/var/log/syslog", "/var/log/messages", "/var/log/auth.log"} {
 			if fileExists(p) {
-				logPaths = append(logPaths, p)
+				paths = append(paths, p)
 			}
 		}
-		if len(logPaths) == 0 {
+		if len(paths) == 0 {
 			err = fmt.Errorf("no syslog files found (/var/log/syslog, /var/log/messages)")
 			return
 		}
+		logSources = []LogSource{{Name: sanitizeServiceName(*svcName), Paths: paths}}
 
 	case "iis_log":
+		svcName := fs.String("service", "iis", "")
 		folder := fs.String("log-folder", `C:\inetpub\logs\LogFiles\`, "")
 		if e := fs.Parse(args); e != nil {
 			err = e
@@ -248,10 +255,10 @@ func parseAddArgs(svcType string, args []string) (receiver, block string, logPat
 		if !strings.HasSuffix(f, `\`) {
 			f += `\`
 		}
-		logPaths = append(logPaths, f+`**\*.log`)
+		logSources = []LogSource{{Name: sanitizeServiceName(*svcName), Paths: []string{f + `**\*.log`}}}
 
 	case "custom_log":
-		// --path can be repeated
+		svcName := fs.String("service", "", "")
 		var paths multiFlag
 		fs.Var(&paths, "path", "")
 		if e := fs.Parse(args); e != nil {
@@ -262,10 +269,62 @@ func parseAddArgs(svcType string, args []string) (receiver, block string, logPat
 			err = fmt.Errorf("--path is required (repeat for multiple files)")
 			return
 		}
-		logPaths = []string(paths)
+		name := *svcName
+		if name == "" {
+			// Try to detect from first file's content, fall back to filename.
+			name = detectServiceFromFile(paths[0])
+		}
+		logSources = []LogSource{{Name: sanitizeServiceName(name), Paths: []string(paths)}}
 	}
 
-	return receiver, block, logPaths, envVars, nil
+	return receiver, block, logSources, envVars, nil
+}
+
+// detectServiceFromFile peeks at the first few lines of a log file to infer
+// the service type. Falls back to the file's basename without extension.
+func detectServiceFromFile(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return fileBasename(path)
+	}
+	defer f.Close()
+
+	buf := make([]byte, 4096)
+	n, _ := f.Read(buf)
+	if n == 0 {
+		return fileBasename(path)
+	}
+	firstLine := strings.SplitN(string(buf[:n]), "\n", 2)[0]
+
+	// Syslog: "Jun 13 19:05:03 host process[pid]:" or ISO timestamp variant
+	if matched, _ := regexp.MatchString(`^[A-Z][a-z]{2}\s+\d+ \d+:\d+:\d+ \S+ \S`, firstLine); matched {
+		return "syslog"
+	}
+	if matched, _ := regexp.MatchString(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.*\s+\S+\[\d+\]:`, firstLine); matched {
+		return "syslog"
+	}
+	// nginx/Apache CLF: "1.2.3.4 - - [13/Jun/2026:19:05:03 +0000] "GET ..."
+	if matched, _ := regexp.MatchString(`^\d+\.\d+\.\d+\.\d+ - .+ \[`, firstLine); matched {
+		return "nginx"
+	}
+
+	return fileBasename(path)
+}
+
+// fileBasename returns the filename without directory or extension, sanitized.
+func fileBasename(path string) string {
+	base := filepath.Base(path)
+	if i := strings.LastIndex(base, "."); i > 0 {
+		base = base[:i]
+	}
+	return base
+}
+
+// sanitizeServiceName lowercases and replaces non-alphanumeric chars with underscores.
+func sanitizeServiceName(name string) string {
+	re := regexp.MustCompile(`[^a-zA-Z0-9_-]`)
+	s := re.ReplaceAllString(strings.TrimSpace(name), "_")
+	return strings.ToLower(strings.Trim(s, "_"))
 }
 
 // multiFlag is a flag.Value that accumulates repeated --flag values.
@@ -278,16 +337,16 @@ func (m *multiFlag) Set(v string) error {
 }
 
 // applyAddition writes the new receiver/logs to the config and env files.
-func applyAddition(configFile, envFile, receiver, block string, logPaths []string, envVars map[string]string) {
+func applyAddition(configFile, envFile, receiver, block string, logSources []LogSource, envVars map[string]string) {
 	if block != "" {
 		if err := addReceiverToConfig(configFile, receiver, block); err != nil {
 			fmt.Fprintf(os.Stderr, "  [!] Could not update config: %v\n", err)
 			os.Exit(1)
 		}
 	}
-	if len(logPaths) > 0 {
-		if err := addLogPathsToConfig(configFile, logPaths); err != nil {
-			fmt.Fprintf(os.Stderr, "  [!] Could not update log paths: %v\n", err)
+	if len(logSources) > 0 {
+		if err := addLogSourcesToConfig(configFile, logSources); err != nil {
+			fmt.Fprintf(os.Stderr, "  [!] Could not update log sources: %v\n", err)
 			os.Exit(1)
 		}
 	}
@@ -314,7 +373,6 @@ func addReceiverToConfig(configFile, receiver, block string) error {
 	if !strings.Contains(content, marker) {
 		return fmt.Errorf("could not find processors section in config")
 	}
-	// Only insert if receiver not already present.
 	if !strings.Contains(content, "  "+receiver+":") {
 		content = strings.Replace(content, marker, "\n"+block+marker, 1)
 	}
@@ -329,7 +387,7 @@ func addReceiverToConfig(configFile, receiver, block string) error {
 		existing := strings.TrimSpace(sub[2])
 		for _, r := range strings.Split(existing, ",") {
 			if strings.TrimSpace(r) == receiver {
-				return m // already present
+				return m
 			}
 		}
 		if existing == "" {
@@ -341,39 +399,73 @@ func addReceiverToConfig(configFile, receiver, block string) error {
 	return os.WriteFile(configFile, []byte(content), 0o644)
 }
 
-// addLogPathsToConfig adds log paths to the filelog receiver, creating the
-// receiver and a logs pipeline if they don't exist yet.
-func addLogPathsToConfig(configFile string, paths []string) error {
+// addLogSourcesToConfig adds named filelog/<name> receivers for each LogSource,
+// creating the logs pipeline if needed.
+func addLogSourcesToConfig(configFile string, sources []LogSource) error {
 	data, err := os.ReadFile(configFile)
 	if err != nil {
 		return err
 	}
 	content := string(data)
 
-	includeLines := ""
-	for _, p := range paths {
-		includeLines += "      - " + p + "\n"
-	}
+	for _, src := range sources {
+		receiverKey := "filelog/" + src.Name
+		receiverHeader := "  " + receiverKey + ":"
 
-	if strings.Contains(content, "  filelog:") {
-		// Append to existing include list.
-		content = strings.Replace(content,
-			"    include_file_path:",
-			includeLines+"    include_file_path:",
-			1)
-	} else {
-		// Create filelog receiver section.
-		filelogBlock := "\n  filelog:\n    include:\n" + includeLines +
-			"    include_file_path: true\n    include_file_name: false\n"
-		content = strings.Replace(content, "\nprocessors:", filelogBlock+"\nprocessors:", 1)
+		if strings.Contains(content, receiverHeader) {
+			// Receiver already exists — append new paths before include_file_path.
+			idx := strings.Index(content, receiverHeader)
+			rest := content[idx:]
+			ipIdx := strings.Index(rest, "    include_file_path:")
+			if ipIdx >= 0 {
+				newLines := ""
+				for _, p := range src.Paths {
+					newLines += "      - " + p + "\n"
+				}
+				abs := idx + ipIdx
+				content = content[:abs] + newLines + content[abs:]
+			}
+		} else {
+			// Build a new named filelog receiver block.
+			block := "  " + receiverKey + ":\n    include:\n"
+			for _, p := range src.Paths {
+				block += "      - " + p + "\n"
+			}
+			block += "    include_file_path: true\n"
+			block += "    include_file_name: false\n"
+			block += "    operators:\n"
+			block += "      - type: add\n"
+			block += "        field: resource[\"service.name\"]\n"
+			block += "        value: " + src.Name + "\n"
 
-		// Create logs pipeline if it doesn't exist.
+			content = strings.Replace(content, "\nprocessors:", "\n"+block+"\nprocessors:", 1)
+		}
+
+		// Add receiver to the logs pipeline, creating the pipeline if needed.
 		if !strings.Contains(content, "    logs:") {
 			logsPipeline := "    logs:\n" +
-				"      receivers: [filelog]\n" +
+				"      receivers: [" + receiverKey + "]\n" +
 				"      processors: [memory_limiter, resourcedetection, batch]\n" +
 				"      exporters: [zharp]\n"
 			content = strings.Replace(content, "    metrics:", logsPipeline+"    metrics:", 1)
+		} else {
+			re := regexp.MustCompile(`([ \t]+logs:[ \t]*\r?\n[ \t]+receivers:[ \t]*\[)([^\]]*)\]`)
+			content = re.ReplaceAllStringFunc(content, func(m string) string {
+				sub := re.FindStringSubmatch(m)
+				if len(sub) < 3 {
+					return m
+				}
+				existing := strings.TrimSpace(sub[2])
+				for _, r := range strings.Split(existing, ",") {
+					if strings.TrimSpace(r) == receiverKey {
+						return m
+					}
+				}
+				if existing == "" {
+					return sub[1] + receiverKey + "]"
+				}
+				return sub[1] + existing + ", " + receiverKey + "]"
+			})
 		}
 	}
 
@@ -438,16 +530,21 @@ func printAddUsage() {
 	fmt.Println("    redis     --endpoint HOST:PORT [--password PASS]")
 	fmt.Println("    mongo     --endpoint HOST:PORT --user USER --password PASS")
 	fmt.Println("    docker")
-	fmt.Println("    nginx     [--access-log PATH] [--error-log PATH]")
-	fmt.Println("    apache    [--access-log PATH]")
-	fmt.Println("    syslog")
-	fmt.Println("    iis       [--log-folder PATH]")
-	fmt.Println("    logs      --path PATH  (--path can be repeated)")
+	fmt.Println("    nginx     [--service NAME] [--access-log PATH] [--error-log PATH]")
+	fmt.Println("    apache    [--service NAME] [--access-log PATH]")
+	fmt.Println("    syslog    [--service NAME]")
+	fmt.Println("    iis       [--service NAME] [--log-folder PATH]")
+	fmt.Println("    logs      --path PATH [--path PATH ...] [--service NAME]")
+	fmt.Println()
+	fmt.Println("  Service name:")
+	fmt.Println("    --service sets the name shown in the Zharp dashboard.")
+	fmt.Println("    For 'logs', if omitted it is detected from file content or filename.")
 	fmt.Println()
 	fmt.Println("  Examples:")
 	fmt.Println(`    sudo zharp-collector add postgres --host localhost --user zharp_monitor --password secret --db myapp`)
 	fmt.Println(`    sudo zharp-collector add docker`)
-	fmt.Println(`    sudo zharp-collector add logs --path /var/log/myapp/app.log --path /var/log/myapp/error.log`)
+	fmt.Println(`    sudo zharp-collector add logs --path /var/log/myapp/app.log --service myapp`)
+	fmt.Println(`    sudo zharp-collector add nginx --service frontend`)
 	fmt.Println()
 }
 
@@ -462,6 +559,6 @@ func printAddTypeUsage(svcType string) {
 	case "mongo":
 		fmt.Fprintln(os.Stderr, "  Usage: zharp-collector add mongo --endpoint HOST:PORT --user USER --password PASS")
 	case "custom_log":
-		fmt.Fprintln(os.Stderr, "  Usage: zharp-collector add logs --path /path/to/file.log")
+		fmt.Fprintln(os.Stderr, "  Usage: zharp-collector add logs --path /path/to/file.log [--service myapp]")
 	}
 }

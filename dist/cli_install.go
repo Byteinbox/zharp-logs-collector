@@ -64,7 +64,7 @@ func cliInstall() {
 
 	metricsReceivers := []string{"hostmetrics"}
 	var receiverBlocks []string
-	var logPaths []string
+	var logSources []LogSource
 	allEnvVars := map[string]string{
 		"ZHARP_API_KEY": apiKey,
 	}
@@ -155,7 +155,7 @@ func cliInstall() {
 
 		fmt.Println()
 		fmt.Printf("  %sConfiguring: %s%s\n", colBold, selected.Label, colReset)
-		receiver, block, logs, ev, isDocker := configureService(selected.Type)
+		receiver, block, sources, ev, isDocker := configureService(selected.Type)
 		doneTypes[selected.Type] = true
 
 		if receiver != "" {
@@ -164,7 +164,7 @@ func cliInstall() {
 		if block != "" {
 			receiverBlocks = append(receiverBlocks, block)
 		}
-		logPaths = append(logPaths, logs...)
+		logSources = append(logSources, sources...)
 		for k, v := range ev {
 			allEnvVars[k] = v
 		}
@@ -192,7 +192,7 @@ func cliInstall() {
 		os.Exit(1)
 	}
 
-	yaml := buildConfigYAML(metricsReceivers, receiverBlocks, logPaths)
+	yaml := buildConfigYAML(metricsReceivers, receiverBlocks, logSources)
 	if err := os.WriteFile(configFile, []byte(yaml), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "  [!] Cannot write config: %v\n", err)
 		os.Exit(1)
@@ -250,13 +250,14 @@ func cliInstall() {
 }
 
 // configureService prompts for service-specific config and returns the
-// receiver name, YAML block, log paths, env vars, and docker flag.
-func configureService(svcType string) (receiver, block string, logs []string, ev map[string]string, isDocker bool) {
+// receiver name, YAML block, log sources, env vars, and docker flag.
+func configureService(svcType string) (receiver, block string, logSources []LogSource, ev map[string]string, isDocker bool) {
 	ev = map[string]string{}
 
 	switch svcType {
 	case "nginx_log":
 		fmt.Printf("  %snginx — log paths%s\n", colBold, colReset)
+		svcName := promptDefault("Service name", "nginx")
 		defaultAccess := "/var/log/nginx/access.log"
 		if runtime.GOOS == "windows" {
 			defaultAccess = `C:\nginx\logs\access.log`
@@ -264,7 +265,7 @@ func configureService(svcType string) (receiver, block string, logs []string, ev
 			defaultAccess = "/usr/local/var/log/nginx/access.log"
 		}
 		p := promptDefault("Access log", defaultAccess)
-		logs = append(logs, p)
+		paths := []string{p}
 		defaultError := ""
 		if runtime.GOOS == "windows" {
 			defaultError = `C:\nginx\logs\error.log`
@@ -275,55 +276,77 @@ func configureService(svcType string) (receiver, block string, logs []string, ev
 		}
 		e := strings.TrimSpace(uiAsk(fmt.Sprintf("Error log [%s] (blank to skip):", defaultError)))
 		if e != "" {
-			logs = append(logs, e)
+			paths = append(paths, e)
 		} else if fileExists(defaultError) {
-			logs = append(logs, defaultError)
+			paths = append(paths, defaultError)
 		}
+		logSources = []LogSource{{Name: sanitizeServiceName(svcName), Paths: paths}}
 		uiOK("nginx logs configured.")
 
 	case "apache_log":
 		fmt.Printf("  %sApache — log path%s\n", colBold, colReset)
+		svcName := promptDefault("Service name", "apache")
 		defaultLog := "/var/log/apache2/access.log"
 		if fileExists("/var/log/httpd/access_log") {
 			defaultLog = "/var/log/httpd/access_log"
 		}
 		p := promptDefault("Access log", defaultLog)
-		logs = append(logs, p)
+		logSources = []LogSource{{Name: sanitizeServiceName(svcName), Paths: []string{p}}}
 		uiOK("Apache logs configured.")
 
 	case "syslog":
+		svcName := promptDefault("Service name", "syslog")
+		var paths []string
 		if fileExists("/var/log/syslog") {
-			logs = append(logs, "/var/log/syslog")
+			paths = append(paths, "/var/log/syslog")
 		}
 		if fileExists("/var/log/messages") {
-			logs = append(logs, "/var/log/messages")
+			paths = append(paths, "/var/log/messages")
 		}
 		if fileExists("/var/log/auth.log") {
-			logs = append(logs, "/var/log/auth.log")
+			paths = append(paths, "/var/log/auth.log")
+		}
+		if len(paths) > 0 {
+			logSources = []LogSource{{Name: sanitizeServiceName(svcName), Paths: paths}}
 		}
 		uiOK("System logs configured.")
 
 	case "iis_log":
+		svcName := promptDefault("Service name", "iis")
 		defaultFolder := `C:\inetpub\logs\LogFiles\`
 		p := promptDefault("IIS log folder", defaultFolder)
 		if !strings.HasSuffix(p, `\`) {
 			p += `\`
 		}
-		logs = append(logs, p+`**\*.log`)
+		logSources = []LogSource{{Name: sanitizeServiceName(svcName), Paths: []string{p + `**\*.log`}}}
 		uiOK("IIS logs configured.")
 
 	case "custom_log":
-		fmt.Printf("  %sCustom log paths%s\n", colBold, colReset)
+		fmt.Printf("  %sCustom log source%s\n", colBold, colReset)
+		uiDimMsg("The service name is shown in the Zharp dashboard to group these logs.")
+		svcName := ""
+		for svcName == "" {
+			svcName = strings.TrimSpace(uiAsk("Service name (e.g. myapp):"))
+			if svcName == "" {
+				uiWarn("Service name is required.")
+			}
+		}
+		svcName = sanitizeServiceName(svcName)
+		fmt.Println()
 		uiDimMsg("Glob patterns OK: /var/log/myapp/*.log")
 		uiDimMsg("Press Enter on a blank line when done.")
 		fmt.Println()
+		var paths []string
 		for {
 			p := strings.TrimSpace(uiAsk("Log path (blank to finish):"))
 			if p == "" {
 				break
 			}
-			logs = append(logs, p)
+			paths = append(paths, p)
 			uiOK("Added: " + p)
+		}
+		if len(paths) > 0 {
+			logSources = []LogSource{{Name: svcName, Paths: paths}}
 		}
 
 	case "pg":
@@ -435,5 +458,5 @@ func configureService(svcType string) (receiver, block string, logs []string, ev
 		uiOK("Docker container metrics configured.")
 	}
 
-	return receiver, block, logs, ev, isDocker
+	return receiver, block, logSources, ev, isDocker
 }
