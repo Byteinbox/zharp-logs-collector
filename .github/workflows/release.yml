@@ -130,6 +130,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build, docker]
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -138,5 +140,8 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**
+          files: |
+            artifacts/**
+            setup.ps1
+            install.sh
           generate_release_notes: true

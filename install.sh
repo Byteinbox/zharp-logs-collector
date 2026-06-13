@@ -25,15 +25,33 @@ hr()      { echo -e "  ${DIM}─────────────────
 ask()     { echo -e -n "  ${CYAN}?${NC}  ${BOLD}$*${NC} "; }
 
 # ── platform ──────────────────────────────────────────────────────────────────
-OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+_UNAME="$(uname -s)"
+OS="$(echo "$_UNAME" | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
 case "$ARCH" in
   x86_64|amd64)  ARCH="amd64" ;;
   aarch64|arm64) ARCH="arm64" ;;
   *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
 esac
+
+# On Windows under Git Bash / MSYS2 / Cygwin, hand off to the PowerShell setup.
+if [[ "$_UNAME" =~ MINGW|MSYS|CYGWIN ]]; then
+  echo
+  echo -e "${BOLD}  Windows detected — launching PowerShell setup...${NC}"
+  echo
+  # setup.ps1 next to this script (local run) or fetched from GitHub (curl pipe)
+  PS1_LOCAL="$(dirname "$0")/setup.ps1"
+  if [[ -f "$PS1_LOCAL" ]]; then
+    powershell.exe -ExecutionPolicy Bypass -NoProfile -File "$(cygpath -w "$PS1_LOCAL")"
+  else
+    powershell.exe -ExecutionPolicy Bypass -NoProfile \
+      -Command "irm https://raw.githubusercontent.com/$REPO/main/setup.ps1 | iex"
+  fi
+  exit $?
+fi
+
 [[ "$OS" != "linux" && "$OS" != "darwin" ]] && {
-  echo "For Windows download from: https://github.com/$REPO/releases/latest" >&2; exit 1; }
+  echo "Unsupported OS: $_UNAME" >&2; exit 1; }
 
 has_cmd() { command -v "$1" &>/dev/null; }
 is_svc()  { systemctl is-active --quiet "$1" 2>/dev/null; }
