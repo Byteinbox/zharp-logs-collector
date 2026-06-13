@@ -48,6 +48,10 @@ func main() {
 		},
 	}
 
+	if handleSubcommand() {
+		return
+	}
+
 	ensureConfig()
 
 	if err := run(set); err != nil {
