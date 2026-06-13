@@ -458,6 +458,20 @@ New-Service `
 # Set restart-on-failure behaviour (3 attempts, 5 s delay each)
 sc.exe failure $SVC_NAME reset= 86400 actions= restart/5000/restart/5000/restart/5000 | Out-Null
 
+# Docker Desktop restricts its named pipe to the docker-users group.
+# The service runs as SYSTEM so we add SYSTEM to docker-users so the receiver can connect.
+if ($done_types.ContainsKey("docker")) {
+    try {
+        Add-LocalGroupMember -Group "docker-users" -Member "NT AUTHORITY\SYSTEM" -ErrorAction Stop
+        ok "Added service account to docker-users group."
+    } catch [Microsoft.PowerShell.Commands.MemberExistsException] {
+        # Already a member — nothing to do
+    } catch {
+        warn "Could not add SYSTEM to docker-users group: $_"
+        warn "Docker container metrics may not appear. Try: Add-LocalGroupMember -Group docker-users -Member 'NT AUTHORITY\SYSTEM'"
+    }
+}
+
 # Store API key and any DB passwords in the service's registry key so the
 # process reads them as normal env vars — no wrapper script needed.
 $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$SVC_NAME"

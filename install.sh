@@ -64,6 +64,10 @@ LOG_PATHS=()
 ADD_FILELOG=false
 METRICS_RECEIVERS=("hostmetrics")
 
+# When piped via `curl | bash`, stdin is the download stream — not the terminal.
+# Reopen stdin from /dev/tty so interactive read prompts work correctly.
+[ -t 0 ] || exec < /dev/tty
+
 # ── banner ────────────────────────────────────────────────────────────────────
 echo
 echo -e "${BOLD}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
