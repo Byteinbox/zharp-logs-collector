@@ -1,62 +1,57 @@
+## Zharp Collector — starter config template
+## Run the guided installer to auto-generate this for your server:
+##   curl -sSL https://raw.githubusercontent.com/Byteinbox/zharp-logs-collector/main/install.sh | sudo bash
+##
+## Or edit manually. Full reference:
+##   https://github.com/Byteinbox/zharp-logs-collector#configuration
+
 extensions:
   health_check:
     endpoint: 0.0.0.0:13133
 
 receivers:
-  # Tail log files on this host
-  filelog:
-    include:
-      - /var/log/nginx/access.log
-      - /var/log/nginx/error.log
-      # - /var/log/myapp/*.log
-    operators:
-      - type: regex_parser
-        regex: '^(?P<time>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?) (?P<level>\w+) (?P<message>.*)$'
-        timestamp:
-          parse_from: attributes.time
-          layout: '%Y-%m-%dT%H:%M:%S%z'
-        severity:
-          parse_from: attributes.level
-      - type: move
-        from: attributes.message
-        to: body
-    resource:
-      service.name: nginx
-
-  # Host metrics (CPU, memory, disk, network)
+  # Host metrics — always recommended
   hostmetrics:
-    collection_interval: 30s
+    collection_interval: 60s
     scrapers:
       cpu:
       memory:
       disk:
       network:
-      filesystem:
       load:
+
+  # Tail log files — add your own paths here
+  # filelog:
+  #   include:
+  #     - /var/log/nginx/access.log
+  #     - /var/log/myapp/*.log
+  #   include_file_path: true
 
 processors:
   batch:
     send_batch_size: 500
     timeout: 5s
-
   memory_limiter:
     limit_mib: 128
     spike_limit_mib: 32
     check_interval: 5s
-
-  # Automatically adds host.name, os.type, etc. to all telemetry
   resourcedetection:
     detectors: [system, env]
     timeout: 5s
 
 exporters:
   zharp:
-    api_key: "YOUR_API_KEY_HERE"
+    api_key: "${env:ZHARP_API_KEY}"
 
 service:
   extensions: [health_check]
   pipelines:
-    logs:
-      receivers: [filelog]
+    metrics:
+      receivers: [hostmetrics]
       processors: [memory_limiter, resourcedetection, batch]
       exporters: [zharp]
+    # Uncomment when you add filelog above:
+    # logs:
+    #   receivers: [filelog]
+    #   processors: [memory_limiter, resourcedetection, batch]
+    #   exporters: [zharp]
