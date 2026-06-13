@@ -71,8 +71,25 @@ jobs:
   docker:
     name: Docker image
     runs-on: ubuntu-latest
+    needs: [build]
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-amd64
+          path: artifacts/linux-amd64/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-arm64
+          path: artifacts/linux-arm64/
+
+      - name: Extract pre-built binaries into build context
+        run: |
+          tar -xzf artifacts/linux-amd64/*.tar.gz zharp-collector-linux-amd64
+          tar -xzf artifacts/linux-arm64/*.tar.gz zharp-collector-linux-arm64
+          chmod +x zharp-collector-linux-amd64 zharp-collector-linux-arm64
 
       - uses: docker/setup-qemu-action@v3
 
