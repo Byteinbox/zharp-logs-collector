@@ -192,7 +192,10 @@ func severityToLevel(sn plog.SeverityNumber) string {
 		return "warn"
 	case sn >= plog.SeverityNumberInfo:
 		return "info"
-	default:
+	case sn >= plog.SeverityNumberDebug:
 		return "debug"
+	default:
+		// SeverityNumberUnspecified — syslog/filelog lines with no OTel severity.
+		return "info"
 	}
 }

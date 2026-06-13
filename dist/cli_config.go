@@ -68,6 +68,20 @@ func buildConfigYAML(metricsReceivers []string, receiverBlocks []string, logPath
 		}
 		sb.WriteString("    include_file_path: true\n")
 		sb.WriteString("    include_file_name: false\n")
+		// Parse process name from syslog lines (both RFC 3164 and systemd ISO format):
+		//   "Jun 13 19:05:03 host process[pid]: msg"
+		//   "2026-06-13T19:05:03+00:00 host process[pid]: msg"
+		// Sets resource["service.name"] so logs are grouped by process in the dashboard.
+		sb.WriteString("    operators:\n")
+		sb.WriteString("      - type: regex_parser\n")
+		sb.WriteString("        regex: '^\\S+\\s+\\S+\\s+(?P<svc>[^\\[\\s:/]+)'\n")
+		sb.WriteString("        parse_to: attributes\n")
+		sb.WriteString("        on_error: send\n")
+		sb.WriteString("      - type: move\n")
+		sb.WriteString("        from: attributes.svc\n")
+		sb.WriteString(`        to: resource["service.name"]`)
+		sb.WriteString("\n")
+		sb.WriteString("        on_error: send\n")
 	}
 
 	// Additional metric receiver blocks.
