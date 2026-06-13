@@ -1,0 +1,37 @@
+# Zharp Collector — Docker Compose
+#
+# Setup:
+#   cp .env.example .env
+#   nano .env          # paste your API key
+#   docker compose up -d
+#
+# The collector will automatically tail logs from every container on this host
+# and collect host + per-container metrics — no per-service config needed.
+#
+# Apps using the OpenTelemetry SDK can push to http://zharp-collector:4317.
+# Example: OTEL_EXPORTER_OTLP_ENDPOINT=http://zharp-collector:4317
+
+services:
+  zharp-collector:
+    image: ghcr.io/byteinbox/zharp-logs-collector:latest
+    container_name: zharp-collector
+    restart: unless-stopped
+    environment:
+      ZHARP_API_KEY: ${ZHARP_API_KEY}
+    volumes:
+      - ./collector-config.yaml:/etc/zharp-collector/config.yaml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /:/hostfs:ro
+    ports:
+      - "4317:4317"    # OTLP gRPC  — apps → collector
+      - "4318:4318"    # OTLP HTTP  — apps → collector
+      - "13133:13133"  # Health check
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:13133 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    # Give the collector access to read host /proc via /hostfs
+    # (required by hostmetricsreceiver on Linux)
+    pid: host

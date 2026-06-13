@@ -182,61 +182,61 @@ Get-Service ZharpCollector
 
 ### Docker
 
-**Run with Docker**
+The collector automatically tails logs from **every container on the host** — no per-service configuration needed. It reads Docker's JSON log files directly and also collects host + per-container metrics via the Docker API.
+
+**Quick start**
 
 ```bash
-docker run -d \
-  --name zharp-collector \
-  --restart unless-stopped \
-  -e ZHARP_API_KEY=your_api_key_here \
-  -v /var/log:/var/log:ro \
-  -v /proc:/hostfs/proc:ro \
-  -v /sys:/hostfs/sys:ro \
-  -v /:/hostfs:ro \
-  -p 4317:4317 \
-  -p 4318:4318 \
-  ghcr.io/Byteinbox/zharp-logs-collector:latest
+cd deploy/docker
+cp .env.example .env && nano .env   # paste your API key
+docker compose up -d
 ```
 
-**Docker Compose sidecar**
+That's it. Every container's stdout/stderr appears in Zharp within seconds.
 
-Add the collector as a sidecar in your `docker-compose.yml`:
+**If your app uses the OpenTelemetry SDK**, it can also push traces and metrics directly to the collector:
 
 ```yaml
-services:
-  # --- your application ---
-  app:
-    image: your-app:latest
-    environment:
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://zharp-collector:4317
-    depends_on:
-      - zharp-collector
+# In your app's service definition
+environment:
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://zharp-collector:4317
+```
 
-  # --- zharp collector sidecar ---
-  zharp-collector:
-    image: ghcr.io/Byteinbox/zharp-logs-collector:latest
-    restart: unless-stopped
-    environment:
-      ZHARP_API_KEY: ${ZHARP_API_KEY}
-    volumes:
-      - ./zharp-collector.yaml:/etc/zharp-collector/config.yaml:ro
-      - /var/log:/var/log:ro
-      - /:/hostfs:ro
-    ports:
-      - "4317:4317"   # OTLP gRPC (for apps to push telemetry)
-      - "4318:4318"   # OTLP HTTP
-      - "13133:13133" # Health check
+The `deploy/docker/collector-config.yaml` file is pre-configured for all of this — filelog tailing all containers, OTLP receiver, host metrics, and Docker API metrics.
+
+---
+
+### Docker Swarm
+
+Runs one collector per Swarm node (global service) so every node's container logs are covered automatically.
+
+```bash
+# Store the config as a Swarm config object (run once on the manager)
+docker config create zharp_collector_config deploy/swarm/collector-config.yaml
+
+# Deploy
+ZHARP_API_KEY=your_api_key docker stack deploy -c deploy/swarm/docker-stack.yml zharp
+```
+
+Apps on any node send OTLP to `localhost:4317` (ports are in host mode, so they bind directly on the node).
+
+To update the config after a change:
+
+```bash
+docker config rm zharp_collector_config
+docker config create zharp_collector_config deploy/swarm/collector-config.yaml
+docker service update --force zharp_collector
 ```
 
 ---
 
-### Kubernetes
+### Kubernetes / EKS / GKE / AKS
 
-The collector runs as a **DaemonSet** — one pod per node — so it can tail logs from all containers on that node and collect host metrics.
+The collector runs as a **DaemonSet** — one pod per node — tailing all container logs from `/var/log/containers/` and collecting host metrics. Works on any Kubernetes distribution including EKS, GKE, and AKS with no changes.
 
-**Prerequisites**: `kubectl` configured, `kustomize` installed (or `kubectl` v1.14+).
+Every log line and metric is automatically enriched with pod name, namespace, deployment name, container name, and image tag via the `k8sattributes` processor.
 
-**1. Create the secret with your credentials**
+**1. Create the secret**
 
 ```bash
 kubectl create namespace zharp-system
@@ -252,13 +252,10 @@ kubectl create secret generic zharp-collector-secret \
 kubectl apply -k https://github.com/Byteinbox/zharp-logs-collector//deploy/kubernetes
 ```
 
-Or clone and deploy locally:
+Or locally:
 
 ```bash
 git clone https://github.com/Byteinbox/zharp-logs-collector.git
-cd zharp-otel-collector
-
-# Update the image tag in deploy/kubernetes/daemonset.yaml if needed
 kubectl apply -k deploy/kubernetes/
 ```
 
@@ -269,12 +266,10 @@ kubectl -n zharp-system get pods
 kubectl -n zharp-system logs -l app=zharp-collector --follow
 ```
 
-**Sidecar pattern (inject OTLP into a pod)**
-
-To receive OTLP from an application pod on the same node, send to the DaemonSet pod on `localhost`:
+**Sending OTLP from your application pods**
 
 ```yaml
-# In your application deployment env vars
+# Add to your Deployment's container env
 - name: OTEL_EXPORTER_OTLP_ENDPOINT
   value: "http://$(HOST_IP):4317"
 - name: HOST_IP
@@ -282,6 +277,49 @@ To receive OTLP from an application pod on the same node, send to the DaemonSet 
     fieldRef:
       fieldPath: status.hostIP
 ```
+
+---
+
+### ECS on EC2
+
+On ECS with the EC2 launch type the collector runs as a **DAEMON** service — one task per EC2 instance — with access to the host Docker socket and container log files, same as a plain Docker host.
+
+**1. Place the collector config on each EC2 instance**
+
+Add this to your EC2 launch template User Data:
+
+```bash
+#!/bin/bash
+mkdir -p /etc/zharp-collector
+cat > /etc/zharp-collector/config.yaml << 'EOF'
+# paste the contents of deploy/docker/collector-config.yaml here
+EOF
+```
+
+**2. Store your API key in Secrets Manager**
+
+```bash
+aws secretsmanager create-secret \
+  --name zharp/api-key \
+  --secret-string 'your_api_key_here'
+```
+
+**3. Register and deploy the daemon task**
+
+Edit `deploy/ecs/ec2-daemon-task.json` — replace `REGION` and `ACCOUNT_ID` — then:
+
+```bash
+aws ecs register-task-definition \
+  --cli-input-json file://deploy/ecs/ec2-daemon-task.json
+
+aws ecs create-service \
+  --cluster YOUR_CLUSTER \
+  --service-name zharp-collector \
+  --task-definition zharp-collector \
+  --scheduling-strategy DAEMON
+```
+
+> **ECS Fargate / Lambda / Cloud Run / Render / Railway / Vercel** — these platforms don't expose the host filesystem, so the agent approach doesn't apply. Logs from these environments are collected through Zharp's integrations (API-based log streaming). See the Integrations section in your Zharp dashboard.
 
 ---
 

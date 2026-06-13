@@ -9,7 +9,6 @@ kind: ClusterRole
 metadata:
   name: zharp-collector
 rules:
-  # Required by hostmetricsreceiver to read /proc and node-level stats
   - apiGroups: [""]
     resources:
       - nodes
@@ -17,6 +16,11 @@ rules:
       - nodes/proxy
       - pods
       - namespaces
+      - endpoints
+    verbs: ["get", "list", "watch"]
+  # Required by k8sattributesprocessor to resolve ReplicaSet → Deployment name
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
     verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

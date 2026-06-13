@@ -1,0 +1,87 @@
+## Zharp Collector — Docker host config
+## Automatically collects logs from ALL containers on this host.
+## No per-service configuration needed — just run the compose file.
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  # Tail every container's logs — zero config needed per service
+  filelog:
+    include:
+      - /var/lib/docker/containers/*/*.log
+    include_file_path: true
+    include_file_name: false
+    operators:
+      - type: json_parser
+        timestamp:
+          parse_from: attributes.time
+          layout: '%Y-%m-%dT%H:%M:%S.%fZ'
+        on_error: drop
+      - type: move
+        from: attributes.log
+        to: body
+      # Attach the container ID so Zharp can group logs by container
+      - type: regex_parser
+        parse_from: attributes["log.file.path"]
+        regex: '/var/lib/docker/containers/(?P<container_id>[a-f0-9]+)/'
+        on_error: drop
+
+  # Receive traces/metrics/logs from apps that use the OpenTelemetry SDK
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # Host CPU, memory, disk, network
+  hostmetrics:
+    root_path: /hostfs
+    collection_interval: 30s
+    scrapers:
+      cpu:
+      memory:
+      disk:
+      network:
+      filesystem:
+      load:
+
+  # Per-container CPU, memory, network (pulled from Docker API)
+  docker_stats:
+    endpoint: unix:///var/run/docker.sock
+    collection_interval: 30s
+    timeout: 20s
+
+processors:
+  batch:
+    send_batch_size: 500
+    timeout: 5s
+  memory_limiter:
+    limit_mib: 256
+    spike_limit_mib: 64
+    check_interval: 5s
+  resourcedetection:
+    detectors: [system, docker, env]
+    timeout: 5s
+
+exporters:
+  zharp:
+    api_key: "${env:ZHARP_API_KEY}"
+
+service:
+  extensions: [health_check]
+  pipelines:
+    logs:
+      receivers: [filelog, otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [zharp]
+    metrics:
+      receivers: [hostmetrics, docker_stats, otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [zharp]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [zharp]
