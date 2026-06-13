@@ -1,5 +1,5 @@
 # Zharp Collector — Windows installer
-# Downloads the binary and delegates to: zharp-collector install
+# Downloads the binary and prints next steps.
 #
 # Run as Administrator:
 #   irm https://raw.githubusercontent.com/Byteinbox/zharp-logs-collector/main/setup.ps1 | iex
@@ -36,5 +36,13 @@ New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
 Invoke-WebRequest -Uri $URL -OutFile $EXE_PATH -UseBasicParsing
 Write-Host "  Installed -> $EXE_PATH"
 
-# ── delegate to the binary's built-in install wizard ────────────────────────
-& $EXE_PATH install
+# ── done ────────────────────────────────────────────────────────────────────
+Write-Host
+Write-Host "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+Write-Host "    zharp-collector $VERSION installed."
+Write-Host "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+Write-Host
+Write-Host "  Run the setup wizard in an elevated terminal:"
+Write-Host
+Write-Host "    zharp-collector install"
+Write-Host

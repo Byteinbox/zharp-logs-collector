@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Zharp Collector — installer
-# Downloads the binary and delegates to: zharp-collector install
+# Downloads the binary and prints next steps.
 set -euo pipefail
 
 REPO="Byteinbox/zharp-logs-collector"
@@ -58,5 +58,13 @@ tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
 install -m 755 "$TMP/zharp-collector-${OS}-${ARCH}" "$INSTALL_DIR/zharp-collector"
 echo "  Installed → $INSTALL_DIR/zharp-collector"
 
-# ── delegate to the binary's built-in install wizard ──────────────────────────
-exec "$INSTALL_DIR/zharp-collector" install
+# ── done ──────────────────────────────────────────────────────────────────────
+echo
+echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "    zharp-collector $VERSION installed."
+echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo
+echo "  Run the setup wizard:"
+echo
+echo "    sudo zharp-collector install"
+echo

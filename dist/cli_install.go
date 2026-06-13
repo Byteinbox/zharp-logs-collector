@@ -26,9 +26,6 @@ func cliInstall() {
 		}
 	}
 
-	// Reopen stdin from /dev/tty if exec'd from a non-interactive context (curl | bash).
-	reopenStdinTTY()
-
 	// Step 1: Banner.
 	uiBanner()
 
