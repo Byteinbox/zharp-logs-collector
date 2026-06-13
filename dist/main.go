@@ -48,6 +48,8 @@ func main() {
 		},
 	}
 
+	ensureConfig()
+
 	if err := run(set); err != nil {
 		// The error message is logged by cobra, so we intentionally
 		// avoid logging it again here to prevent duplicate output.
